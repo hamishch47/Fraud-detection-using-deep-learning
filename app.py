@@ -19,6 +19,12 @@ import torch.nn as nn
 
 
 # -------------------------
+# Configure artifact path (Google Drive)
+# -------------------------
+ART_DIR = Path("/content/drive/MyDrive/Colab Notebooks/fraud_app/results")
+
+
+# -------------------------
 # Model definition (MUST match notebook)
 # -------------------------
 class ImprovedMLP(nn.Module):
@@ -61,19 +67,23 @@ def mc_predict(model, X, T=20):
 # Load artifacts
 # -------------------------
 @st.cache_resource
-def load_artifacts(art_dir="results"):
-    art = Path(art_dir)
+def load_artifacts():
+    if not ART_DIR.exists():
+        raise FileNotFoundError(
+            f"Artifact directory not found: {ART_DIR}\n"
+            "Did you mount Google Drive in Colab and put your artifacts there?"
+        )
 
-    feature_input_cols = joblib.load(art / "feature_input_cols.pkl")
-    te = joblib.load(art / "target_encoder.pkl")
-    scaler = joblib.load(art / "scaler.pkl")
-    pca = joblib.load(art / "pca.pkl")
+    feature_input_cols = joblib.load(ART_DIR / "feature_input_cols.pkl")
+    te = joblib.load(ART_DIR / "target_encoder.pkl")
+    scaler = joblib.load(ART_DIR / "scaler.pkl")
+    pca = joblib.load(ART_DIR / "pca.pkl")
 
-    with open(art / "target_mean.json", "r") as f:
+    with open(ART_DIR / "target_mean.json", "r") as f:
         target_mean = json.load(f)["target_mean"]
 
     # medians are optional for the app; if missing, we fallback to 0
-    medians_path = art / "medians.json"
+    medians_path = ART_DIR / "medians.json"
     medians = {}
     if medians_path.exists():
         with open(medians_path, "r") as f:
@@ -81,19 +91,19 @@ def load_artifacts(art_dir="results"):
 
     card_stats = {}
     for card_col in ["card1", "card2", "card3"]:
-        p = art / f"{card_col}_stats.parquet"
+        p = ART_DIR / f"{card_col}_stats.parquet"
         if p.exists():
             card_stats[card_col] = pd.read_parquet(p)
 
     # config is optional
     config = {}
-    config_path = art / "config.json"
+    config_path = ART_DIR / "config.json"
     if config_path.exists():
         with open(config_path, "r") as f:
             config = json.load(f)
 
     model = ImprovedMLP(input_dim=len(feature_input_cols))
-    state = torch.load(art / "mlp_state_dict.pt", map_location="cpu")
+    state = torch.load(ART_DIR / "mlp_state_dict.pt", map_location="cpu")
     model.load_state_dict(state)
     model.eval()
 
@@ -175,7 +185,6 @@ def preprocess_raw_to_features(df_raw, te, pca, medians, target_mean, card_stats
 
 
 def align_and_scale(df_feat, feature_input_cols, scaler):
-    # Ensure all required input columns exist
     for c in feature_input_cols:
         if c not in df_feat.columns:
             df_feat[c] = 0.0
@@ -198,6 +207,7 @@ with st.sidebar:
     use_mc = st.checkbox("Compute uncertainty (MC Dropout)", value=False)
     T = st.slider("MC samples (T)", 5, 50, int(config.get("mc_dropout_T", 20)))
     threshold = st.slider("Flag threshold", 0.0, 1.0, float(config.get("threshold", 0.5)), 0.01)
+    st.caption(f"Artifacts loaded from: {ART_DIR}")
 
 uploaded = st.file_uploader("Upload CSV (must include TransactionDT, TransactionAmt, and V* columns)", type=["csv"])
 
