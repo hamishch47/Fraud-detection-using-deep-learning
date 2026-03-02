@@ -1,0 +1,8 @@
+streamlit==1.42.0
+pandas==2.2.2
+numpy==1.26.4
+scikit-learn==1.5.2
+torch==2.2.2
+joblib==1.4.2
+category-encoders==2.6.3
+pyarrow==15.0.2
