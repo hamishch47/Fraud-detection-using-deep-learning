@@ -17,16 +17,15 @@ import streamlit as st
 import torch
 import torch.nn as nn
 
-
-# -------------------------
-# Configure artifact path (Google Drive)
-# -------------------------
+# =========================
+# Artifact path (Google Drive)
+# =========================
 ART_DIR = Path("/content/drive/MyDrive/Colab_Notebooks/fraud_app/results")
 
 
-# -------------------------
-# Model definition (MUST match notebook)
-# -------------------------
+# =========================
+# Model definition (MUST match your notebook)
+# =========================
 class ImprovedMLP(nn.Module):
     def __init__(self, input_dim: int):
         super().__init__()
@@ -46,7 +45,8 @@ class ImprovedMLP(nn.Module):
         return self.fc5(x)
 
 
-def mc_predict(model, X, T=20):
+def mc_predict(model: nn.Module, X: torch.Tensor, T: int = 20):
+    """MC Dropout prediction: returns mean probability and variance."""
     model.eval()
     for m in model.modules():
         if isinstance(m, nn.Dropout):
@@ -63,17 +63,18 @@ def mc_predict(model, X, T=20):
     return probs.mean(axis=0).reshape(-1), probs.var(axis=0).reshape(-1)
 
 
-# -------------------------
+# =========================
 # Load artifacts
-# -------------------------
+# =========================
 @st.cache_resource
 def load_artifacts():
     if not ART_DIR.exists():
         raise FileNotFoundError(
             f"Artifact directory not found: {ART_DIR}\n"
-            "Did you mount Google Drive in Colab and put your artifacts there?"
+            "In Colab, run drive.mount('/content/drive') and ensure artifacts exist in this folder."
         )
 
+    # Required
     feature_input_cols = joblib.load(ART_DIR / "feature_input_cols.pkl")
     te = joblib.load(ART_DIR / "target_encoder.pkl")
     scaler = joblib.load(ART_DIR / "scaler.pkl")
@@ -82,9 +83,9 @@ def load_artifacts():
     with open(ART_DIR / "target_mean.json", "r") as f:
         target_mean = json.load(f)["target_mean"]
 
-    # medians are optional for the app; if missing, we fallback to 0
-    medians_path = ART_DIR / "medians.json"
+    # Optional
     medians = {}
+    medians_path = ART_DIR / "medians.json"
     if medians_path.exists():
         with open(medians_path, "r") as f:
             medians = json.load(f)
@@ -95,7 +96,6 @@ def load_artifacts():
         if p.exists():
             card_stats[card_col] = pd.read_parquet(p)
 
-    # config is optional
     config = {}
     config_path = ART_DIR / "config.json"
     if config_path.exists():
@@ -110,12 +110,20 @@ def load_artifacts():
     return config, feature_input_cols, te, scaler, pca, medians, target_mean, card_stats, model
 
 
-# -------------------------
-# Preprocess (mirror notebook logic as closely as possible)
-# -------------------------
-def preprocess_raw_to_features(df_raw, te, pca, medians, target_mean, card_stats):
+# =========================
+# Preprocessing (mirrors your notebook logic)
+# =========================
+def preprocess_raw_to_features(
+    df_raw: pd.DataFrame,
+    te,
+    pca,
+    medians: dict,
+    target_mean: float,
+    card_stats: dict,
+) -> pd.DataFrame:
     df = df_raw.copy()
 
+    # Required columns
     required = ["TransactionDT", "TransactionAmt"]
     missing = [c for c in required if c not in df.columns]
     if missing:
@@ -138,6 +146,7 @@ def preprocess_raw_to_features(df_raw, te, pca, medians, target_mean, card_stats
             df[c] = df[c].astype("object").fillna("missing")
 
     # Numeric fill using saved medians when available
+    # (If your medians.json doesn't include V columns, those V NaNs will be handled below.)
     for col, med in medians.items():
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(med)
@@ -155,12 +164,12 @@ def preprocess_raw_to_features(df_raw, te, pca, medians, target_mean, card_stats
             df[f"{card_col}_fraud_rate"] = df[f"{card_col}_fraud_rate"].fillna(target_mean)
             df[f"{card_col}_count"] = df[f"{card_col}_count"].fillna(0)
 
-    # PCA for V columns (expects same V columns used during training)
+    # PCA for V columns (expects V1..V339)
     v_cols = [c for c in df.columns if c.startswith("V")]
     if not v_cols:
-        raise ValueError("No V* columns found. Upload must include V1..V339 (as used in training).")
+        raise ValueError("No V* columns found. Upload must include V1..V339.")
 
-    # Ensure stable column order (V1, V2, ...)
+    # stable order V1, V2, ...
     def v_key(c):
         try:
             return int(c[1:])
@@ -168,23 +177,26 @@ def preprocess_raw_to_features(df_raw, te, pca, medians, target_mean, card_stats
             return 10**9
 
     v_cols = sorted(v_cols, key=v_key)
-    Xv = df[v_cols].apply(pd.to_numeric, errors="coerce").fillna(0).values.astype(np.float32)
-    Xv_pca = pca.transform(Xv)
 
+    # Fill V NaNs (fallback to 0 if not covered by medians)
+    Xv_df = df[v_cols].apply(pd.to_numeric, errors="coerce")
+    Xv_df = Xv_df.fillna(0.0)
+    Xv = Xv_df.values.astype(np.float32)
+
+    Xv_pca = pca.transform(Xv)
     for i in range(Xv_pca.shape[1]):
         df[f"V_pca_{i}"] = Xv_pca[:, i]
 
-    # Drop raw V columns (training replaced them with PCA components)
+    # Drop raw V columns and raw TransactionDT (as in notebook)
     df = df.drop(columns=v_cols)
-
-    # Drop TransactionDT (training dropped raw time after feature engineering)
     if "TransactionDT" in df.columns:
         df = df.drop(columns=["TransactionDT"])
 
     return df
 
 
-def align_and_scale(df_feat, feature_input_cols, scaler):
+def align_and_scale(df_feat: pd.DataFrame, feature_input_cols: list[str], scaler) -> np.ndarray:
+    # Create missing columns (safe default = 0.0)
     for c in feature_input_cols:
         if c not in df_feat.columns:
             df_feat[c] = 0.0
@@ -194,11 +206,31 @@ def align_and_scale(df_feat, feature_input_cols, scaler):
     return Xs
 
 
-# -------------------------
-# Streamlit UI
-# -------------------------
+def build_compact_output(df_raw: pd.DataFrame, probs: np.ndarray, flags: np.ndarray, var: np.ndarray | None = None):
+    out = pd.DataFrame()
+
+    # Prefer to include TransactionID (unique identifier)
+    if "TransactionID" in df_raw.columns:
+        out["TransactionID"] = df_raw["TransactionID"]
+
+    # Add a small set of human-readable fields for demo (only if present)
+    for c in ["TransactionDT", "TransactionAmt", "ProductCD", "card1", "card4", "DeviceType"]:
+        if c in df_raw.columns:
+            out[c] = df_raw[c]
+
+    out["fraud_probability"] = probs
+    if var is not None:
+        out["uncertainty_variance"] = var
+    out["fraud_flag"] = flags
+
+    return out
+
+
+# =========================
+# UI
+# =========================
 st.set_page_config(page_title="Fraud Detection (CSV)", layout="wide")
-st.title("Fraud Detection using Deep Learning — CSV Uploader")
+st.title("Fraud Detection using Deep Learning — CSV Uploader (Compact Output)")
 
 config, feature_input_cols, te, scaler, pca, medians, target_mean, card_stats, model = load_artifacts()
 
@@ -209,52 +241,62 @@ with st.sidebar:
     threshold = st.slider("Flag threshold", 0.0, 1.0, float(config.get("threshold", 0.5)), 0.01)
     st.caption(f"Artifacts loaded from: {ART_DIR}")
 
-uploaded = st.file_uploader("Upload CSV (must include TransactionDT, TransactionAmt, and V* columns)", type=["csv"])
+uploaded = st.file_uploader(
+    "Upload CSV (must include TransactionDT, TransactionAmt, and V1..V339)",
+    type=["csv"],
+)
 
 if uploaded is None:
     st.info("Upload a CSV to run predictions.")
     st.stop()
 
 df_raw = pd.read_csv(uploaded)
+
+# Show a small preview of input (optional)
 st.subheader("Input preview")
-st.dataframe(df_raw.head(20), use_container_width=True)
+preview_cols = [c for c in ["TransactionID", "TransactionDT", "TransactionAmt", "ProductCD", "card1", "card4", "DeviceType"] if c in df_raw.columns]
+st.dataframe(df_raw[preview_cols].head(20) if preview_cols else df_raw.head(10), use_container_width=True)
 
 try:
+    # Preprocess -> align -> scale
     df_feat = preprocess_raw_to_features(df_raw, te, pca, medians, target_mean, card_stats)
     Xs = align_and_scale(df_feat, feature_input_cols, scaler)
     Xt = torch.tensor(Xs, dtype=torch.float32)
 
+    # Predict
     if use_mc:
         probs, var = mc_predict(model, Xt, T=T)
-        out = df_raw.copy()
-        out["fraud_probability"] = probs
-        out["uncertainty_variance"] = var
+        flags = (probs >= threshold).astype(int)
+        out_compact = build_compact_output(df_raw, probs, flags, var=var)
     else:
         with torch.no_grad():
             probs = torch.sigmoid(model(Xt)).numpy().reshape(-1)
-        out = df_raw.copy()
-        out["fraud_probability"] = probs
+        flags = (probs >= threshold).astype(int)
+        out_compact = build_compact_output(df_raw, probs, flags, var=None)
 
-    out["fraud_flag"] = (out["fraud_probability"] >= threshold).astype(int)
+    # Display compact output
+    st.subheader("Predictions (compact)")
+    st.dataframe(out_compact.head(50), use_container_width=True)
 
-    st.subheader("Predictions")
-    st.dataframe(out.head(50), use_container_width=True)
-
+    # Summary
     st.subheader("Summary")
     st.write(
         {
-            "rows": int(len(out)),
-            "flagged": int(out["fraud_flag"].sum()),
-            "flagged_percent": float(100.0 * out["fraud_flag"].mean()),
+            "rows": int(len(out_compact)),
+            "flagged": int(out_compact["fraud_flag"].sum()),
+            "flagged_percent": float(100.0 * out_compact["fraud_flag"].mean()),
+            "threshold": float(threshold),
         }
     )
 
+    # Download compact CSV only
     st.download_button(
-        "Download predictions CSV",
-        data=out.to_csv(index=False).encode("utf-8"),
-        file_name="predictions.csv",
+        "Download predictions CSV (compact)",
+        data=out_compact.to_csv(index=False).encode("utf-8"),
+        file_name="predictions_compact.csv",
         mime="text/csv",
     )
 
 except Exception as e:
     st.error(f"Inference failed: {e}")
+    st.stop()
