@@ -20,7 +20,7 @@ import torch.nn as nn
 # =========================
 # Artifact path (Google Drive)
 # =========================
-ART_DIR = Path("/content/drive/MyDrive/Colab Notebooks/fraud_app/results")
+ART_DIR = Path("/content/drive/MyDrive/Colab_Notebooks/fraud_app/results")
 
 
 # =========================
