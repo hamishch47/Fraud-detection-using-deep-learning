@@ -1,0 +1,30 @@
+{
+  "_note": "Sample placeholder confusion matrix data (10 000 test samples, ~3.5% fraud). Export real data from Colab using export_metrics.py.",
+  "_sample": true,
+  "models": {
+    "XGBoost": {
+      "matrix": [[9461, 189], [234, 116]],
+      "labels": ["Legitimate", "Fraud"]
+    },
+    "Random Forest": {
+      "matrix": [[9460, 190], [252, 98]],
+      "labels": ["Legitimate", "Fraud"]
+    },
+    "Logistic Regression": {
+      "matrix": [[9454, 196], [266, 84]],
+      "labels": ["Legitimate", "Fraud"]
+    },
+    "LightGBM": {
+      "matrix": [[9458, 192], [242, 108]],
+      "labels": ["Legitimate", "Fraud"]
+    },
+    "MLP Static": {
+      "matrix": [[9450, 200], [256, 94]],
+      "labels": ["Legitimate", "Fraud"]
+    },
+    "Ensemble": {
+      "matrix": [[9507, 143], [207, 143]],
+      "labels": ["Legitimate", "Fraud"]
+    }
+  }
+}

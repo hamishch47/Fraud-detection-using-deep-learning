@@ -1,0 +1,54 @@
+{
+  "_note": "Sample placeholder data. Export real metrics from Colab notebook using export_metrics.py.",
+  "_sample": true,
+  "models": {
+    "XGBoost": {
+      "roc_auc": 0.7781,
+      "pr_auc": 0.1790,
+      "recall_at_5pct_fpr": 0.42,
+      "f1_score": 0.35,
+      "precision": 0.38,
+      "recall": 0.33
+    },
+    "Random Forest": {
+      "roc_auc": 0.7420,
+      "pr_auc": 0.1450,
+      "recall_at_5pct_fpr": 0.38,
+      "f1_score": 0.31,
+      "precision": 0.34,
+      "recall": 0.28
+    },
+    "Logistic Regression": {
+      "roc_auc": 0.7210,
+      "pr_auc": 0.1180,
+      "recall_at_5pct_fpr": 0.30,
+      "f1_score": 0.27,
+      "precision": 0.30,
+      "recall": 0.24
+    },
+    "LightGBM": {
+      "roc_auc": 0.7680,
+      "pr_auc": 0.1720,
+      "recall_at_5pct_fpr": 0.40,
+      "f1_score": 0.33,
+      "precision": 0.36,
+      "recall": 0.31
+    },
+    "MLP Static": {
+      "roc_auc": 0.7555,
+      "pr_auc": 0.1321,
+      "recall_at_5pct_fpr": 0.35,
+      "f1_score": 0.29,
+      "precision": 0.32,
+      "recall": 0.27
+    },
+    "Ensemble": {
+      "roc_auc": 0.8500,
+      "pr_auc": 0.2500,
+      "recall_at_5pct_fpr": 0.55,
+      "f1_score": 0.45,
+      "precision": 0.50,
+      "recall": 0.41
+    }
+  }
+}

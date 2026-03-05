@@ -1,0 +1,50 @@
+{
+  "_note": "Sample placeholder drift analysis data. Export real data from Colab notebook using export_metrics.py.",
+  "_sample": true,
+  "time_windows": {
+    "XGBoost Adaptive": [
+      {"window": 1, "roc_auc": 0.780, "pr_auc": 0.182},
+      {"window": 2, "roc_auc": 0.774, "pr_auc": 0.175},
+      {"window": 3, "roc_auc": 0.720, "pr_auc": 0.140},
+      {"window": 4, "roc_auc": 0.755, "pr_auc": 0.162},
+      {"window": 5, "roc_auc": 0.771, "pr_auc": 0.174},
+      {"window": 6, "roc_auc": 0.718, "pr_auc": 0.138},
+      {"window": 7, "roc_auc": 0.758, "pr_auc": 0.168},
+      {"window": 8, "roc_auc": 0.770, "pr_auc": 0.176}
+    ],
+    "XGBoost Static": [
+      {"window": 1, "roc_auc": 0.778, "pr_auc": 0.179},
+      {"window": 2, "roc_auc": 0.765, "pr_auc": 0.168},
+      {"window": 3, "roc_auc": 0.698, "pr_auc": 0.128},
+      {"window": 4, "roc_auc": 0.710, "pr_auc": 0.135},
+      {"window": 5, "roc_auc": 0.705, "pr_auc": 0.130},
+      {"window": 6, "roc_auc": 0.672, "pr_auc": 0.115},
+      {"window": 7, "roc_auc": 0.680, "pr_auc": 0.118},
+      {"window": 8, "roc_auc": 0.685, "pr_auc": 0.120}
+    ],
+    "MLP Static": [
+      {"window": 1, "roc_auc": 0.755, "pr_auc": 0.132},
+      {"window": 2, "roc_auc": 0.742, "pr_auc": 0.125},
+      {"window": 3, "roc_auc": 0.688, "pr_auc": 0.110},
+      {"window": 4, "roc_auc": 0.695, "pr_auc": 0.112},
+      {"window": 5, "roc_auc": 0.692, "pr_auc": 0.111},
+      {"window": 6, "roc_auc": 0.660, "pr_auc": 0.100},
+      {"window": 7, "roc_auc": 0.665, "pr_auc": 0.102},
+      {"window": 8, "roc_auc": 0.668, "pr_auc": 0.103}
+    ],
+    "Ensemble": [
+      {"window": 1, "roc_auc": 0.850, "pr_auc": 0.250},
+      {"window": 2, "roc_auc": 0.838, "pr_auc": 0.238},
+      {"window": 3, "roc_auc": 0.778, "pr_auc": 0.195},
+      {"window": 4, "roc_auc": 0.810, "pr_auc": 0.220},
+      {"window": 5, "roc_auc": 0.825, "pr_auc": 0.232},
+      {"window": 6, "roc_auc": 0.775, "pr_auc": 0.192},
+      {"window": 7, "roc_auc": 0.808, "pr_auc": 0.218},
+      {"window": 8, "roc_auc": 0.820, "pr_auc": 0.228}
+    ]
+  },
+  "drift_events": [
+    {"window": 3, "description": "ADWIN detected distribution shift in transaction amounts"},
+    {"window": 6, "description": "ADWIN detected shift in fraud patterns — new attack vector"}
+  ]
+}
