@@ -12,6 +12,7 @@ from typing import Optional
 import joblib
 import numpy as np
 import pandas as pd
+from pandas.errors import ParserError
 import streamlit as st
 import torch
 import torch.nn as nn
@@ -656,7 +657,19 @@ def page_live_prediction() -> None:
         st.info("📤 Upload a CSV file to run predictions.")
         return
 
-    df_raw = pd.read_csv(uploaded)
+    try:
+        df_raw = pd.read_csv(uploaded)
+    except ParserError as pe:
+        st.error("❌ Invalid CSV format (column count mismatch).")
+        st.caption(
+        "Please ensure every row has the same number of columns as the header, "
+        "and fields containing commas are quoted."
+        )
+        st.code(str(pe))
+        return
+    except Exception as e:
+        st.error(f"❌ Failed to read CSV: {e}")
+        return
 
     st.subheader("Input Preview")
     preview_cols = [
