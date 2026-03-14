@@ -1,7 +1,6 @@
 {
-  "model_type": "ImprovedMLP",
-  "input_dim": 92,
-  "pca_components": 50,
-  "threshold": 0.5,
-  "mc_dropout_T": 20
+  "mc_dropout_T": 20,
+  "flag_top_percent": 5.0,
+  "n_input_features": 92,
+  "pca_components": 50
 }
