@@ -871,7 +871,10 @@ def page_single_transaction() -> None:
                         artifacts["card_stats"],
                     )
                     Xs = align_and_scale(df_feat, artifacts["feature_input_cols"], artifacts["scaler"])
-                    xgb_prob = float(xgb_model.predict(xgb.DMatrix(Xs))[0])
+X_df = pd.DataFrame(Xs, columns=artifacts["feature_input_cols"])
+xgb_prob = float(
+    xgb_model.predict(xgb.DMatrix(X_df, feature_names=artifacts["feature_input_cols"]))[0]
+)
 
                     xgb_risk_label, xgb_risk_type = _risk_level(xgb_prob)
                     st.markdown("### 🌳 XGBoost (Traditional ML)")
