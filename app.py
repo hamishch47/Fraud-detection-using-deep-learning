@@ -6,16 +6,56 @@ Comparing Traditional ML vs. Deep Learning for Credit Card Fraud Detection
 """
 
 import json
+import os
+import pickle
 from pathlib import Path
+import sys
 from typing import Optional
 
-import joblib
+
+def _ensure_workspace_venv() -> None:
+    """Relaunch with .venv interpreter when started from another environment."""
+    app_path = Path(__file__).resolve()
+    repo_dir = app_path.parent
+    venv_python = repo_dir / ".venv" / "bin" / "python"
+
+    if os.environ.get("FRAUD_APP_VENV_REEXEC") == "1":
+        return
+    if not venv_python.exists():
+        return
+
+    current_python = Path(sys.executable).resolve()
+    if current_python == venv_python.resolve():
+        return
+
+    os.environ["FRAUD_APP_VENV_REEXEC"] = "1"
+    os.execv(
+        str(venv_python),
+        [str(venv_python), "-m", "streamlit", "run", str(app_path), *sys.argv[1:]],
+    )
+
+
+_ensure_workspace_venv()
+
 import numpy as np
 import pandas as pd
 from pandas.errors import ParserError
 import streamlit as st
 import torch
 import torch.nn as nn
+
+try:
+    import joblib
+except ImportError:
+    class _JoblibCompat:
+        """Minimal fallback interface when joblib is unavailable."""
+
+        @staticmethod
+        def load(path):
+            with open(path, "rb") as f:
+                return pickle.load(f)
+
+    joblib = _JoblibCompat()
 
 try:
     import plotly.express as px
