@@ -934,13 +934,6 @@ def page_single_transaction() -> None:
                     st.progress(min(xgb_prob, 1.0), text=xgb_risk_label)
                     getattr(st, xgb_risk_type)(f"Assessment: {xgb_risk_label}")
 
-                    ensemble_prob = 0.6 * xgb_prob + 0.4 * mlp_prob
-                    ens_risk_label, ens_risk_type = _risk_level(ensemble_prob)
-                    st.markdown("### Ensemble (0.6×XGB + 0.4×MLP)")
-                    st.metric("Ensemble Fraud Probability", f"{ensemble_prob:.1%}")
-                    st.progress(min(ensemble_prob, 1.0), text=ens_risk_label)
-                    getattr(st, ens_risk_type)(f"Assessment: {ens_risk_label}")
-
                 except Exception as xe:
                     st.warning(f"XGBoost scoring failed: {xe}")
             else:
