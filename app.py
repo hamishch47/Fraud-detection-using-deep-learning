@@ -357,10 +357,10 @@ def _load_results_json(filename: str) -> tuple[Optional[dict], bool]:
 # Page 1: Project Overview
 # =========================
 def page_overview() -> None:
-    st.title("🏠 Project Overview")
+    st.title("Project Overview")
     st.markdown(
         """
-        ## Adaptive Credit Card Fraud Detection
+        ## Credit Card Fraud Detection
         ### IEEE-CIS Fraud Detection Dataset
 
         This dashboard showcases a comprehensive comparison of **Traditional Machine Learning** vs.
@@ -372,7 +372,7 @@ def page_overview() -> None:
     col1, col2 = st.columns(2)
 
     with col1:
-        st.subheader("🤖 Models Compared")
+        st.subheader("Models Compared")
         st.markdown(
             """
             **Traditional ML:**
@@ -392,7 +392,7 @@ def page_overview() -> None:
         )
 
     with col2:
-        st.subheader("📊 Dataset & Challenges")
+        st.subheader("Dataset & Challenges")
         st.markdown(
             """
             **Dataset:** IEEE-CIS Fraud Detection
@@ -401,9 +401,9 @@ def page_overview() -> None:
             - 434 raw features (transaction + identity tables)
 
             **Key Challenges:**
-            1. 🔄 **Concept Drift** — fraud patterns evolve over time
-            2. ⏱️ **Verification Latency** — labels arrive with delay
-            3. ⚖️ **Class Imbalance** — fraud is extremely rare
+            1. **Concept Drift** — fraud patterns evolve over time
+            2. **Verification Latency** — labels arrive with delay
+            3. **Class Imbalance** — fraud is extremely rare
             """
         )
 
@@ -432,7 +432,7 @@ def page_overview() -> None:
             """
         )
 
-    st.subheader("📈 Baseline Performance (from README)")
+    st.subheader("Baseline Performance (from README)")
     perf_data = {
         "Model": ["XGBoost", "MLP Static", "Ensemble (expected)"],
         "ROC-AUC": [0.7781, 0.7555, ">0.85"],
@@ -441,7 +441,7 @@ def page_overview() -> None:
     st.table(pd.DataFrame(perf_data))
 
     st.info(
-        "📌 Use the sidebar to explore **Model Performance**, run **Live Predictions**, "
+        "Use the sidebar to explore **Model Performance**, run **Live Predictions**, "
         "score a **Single Transaction**, or view **Drift Analysis**."
     )
 
@@ -468,20 +468,20 @@ def _model_category(name: str) -> str:
 
 
 def page_model_performance() -> None:
-    st.title("📊 Model Performance Comparison")
+    st.title("Model Performance Comparison")
 
     metrics_data, is_sample = _load_results_json("metrics_comparison.json")
 
     if metrics_data is None:
         st.warning(
-            "⚠️ `results/metrics_comparison.json` not found. "
+            "`results/metrics_comparison.json` not found. "
             "Run `export_metrics.py` in your Colab notebook to generate real metrics."
         )
         return
 
     if is_sample:
         st.info(
-            "ℹ️ Showing **sample / placeholder data**. "
+            "Showing **sample / placeholder data**. "
             "Export real metrics from your Colab notebook with `export_metrics.py` to see actual results."
         )
 
@@ -508,7 +508,7 @@ def page_model_performance() -> None:
     df_metrics = pd.DataFrame(rows)
 
     # --- Bar charts ---
-    st.subheader("📈 Metric Comparison")
+    st.subheader("Metric Comparison")
     metric_cols = ["ROC-AUC", "PR-AUC", "Recall@5%FPR", "F1-Score"]
 
     if HAS_PLOTLY:
@@ -530,7 +530,7 @@ def page_model_performance() -> None:
         st.bar_chart(df_metrics.set_index("Model")[metric_cols])
 
     # --- ROC Curves ---
-    st.subheader("📉 ROC Curves")
+    st.subheader("ROC Curves")
     roc_data, _ = _load_results_json("roc_curves.json")
     if roc_data and HAS_PLOTLY:
         fig_roc = go.Figure()
@@ -569,7 +569,7 @@ def page_model_performance() -> None:
         st.warning("`results/roc_curves.json` not found.")
 
     # --- PR Curves ---
-    st.subheader("📉 Precision-Recall Curves")
+    st.subheader("Precision-Recall Curves")
     pr_data, _ = _load_results_json("pr_curves.json")
     if pr_data and HAS_PLOTLY:
         fig_pr = go.Figure()
@@ -599,7 +599,7 @@ def page_model_performance() -> None:
         st.warning("`results/pr_curves.json` not found.")
 
     # --- Confusion Matrices ---
-    st.subheader("🔲 Confusion Matrices")
+    st.subheader("Confusion Matrices")
     cm_data, _ = _load_results_json("confusion_matrices.json")
     if cm_data and HAS_PLOTLY:
         cm_models = list(cm_data.get("models", {}).items())
@@ -627,7 +627,7 @@ def page_model_performance() -> None:
         st.warning("`results/confusion_matrices.json` not found.")
 
     # --- Summary table ---
-    st.subheader("📋 Summary Metrics Table")
+    st.subheader("Summary Metrics Table")
     display_cols = ["Model", "Category", "ROC-AUC", "PR-AUC", "Recall@5%FPR", "F1-Score"]
     st.dataframe(
         df_metrics[display_cols]
@@ -638,17 +638,17 @@ def page_model_performance() -> None:
     )
 
     # --- Key takeaways ---
-    st.subheader("💡 Key Takeaways")
+    st.subheader("Key Takeaways")
     best_idx = df_metrics["ROC-AUC"].idxmax()
     best_model = df_metrics.loc[best_idx, "Model"]
     best_roc = df_metrics.loc[best_idx, "ROC-AUC"]
     st.success(
         f"**Best model: {best_model}** (ROC-AUC: {best_roc:.4f})\n\n"
-        "- 🏆 The **Ensemble** (0.6×XGBoost + 0.4×MLP) achieves the highest ROC-AUC and PR-AUC "
+        "- The **Ensemble** (0.6×XGBoost + 0.4×MLP) achieves the highest ROC-AUC and PR-AUC "
         "by combining gradient boosting and deep learning strengths.\n"
-        "- 📊 **XGBoost** is the best single Traditional ML model, especially with adaptive drift detection.\n"
-        "- 🧠 **MLP with MC-Dropout** provides uncertainty estimates valuable for risk management.\n"
-        "- ⚡ **LightGBM** offers a fast alternative with competitive performance."
+        "- **XGBoost** is the best single Traditional ML model, especially with adaptive drift detection.\n"
+        "- **MLP with MC-Dropout** provides uncertainty estimates valuable for risk management.\n"
+        "- **LightGBM** offers a fast alternative with competitive performance."
     )
 
 
@@ -656,7 +656,7 @@ def page_model_performance() -> None:
 # Page 3: Live Prediction Comparison (CSV Upload)
 # =========================
 def page_live_prediction() -> None:
-    st.title("🔍 Live Prediction Comparison")
+    st.title("Live Prediction Comparison")
     st.markdown(
         "Upload a CSV to run predictions through **MLP** (and XGBoost if available) simultaneously."
     )
@@ -665,12 +665,12 @@ def page_live_prediction() -> None:
     xgb_model, xgb_err = load_xgb_model()
 
     if artifacts is None:
-        st.error(f"❌ MLP model not loaded: {art_err}")
+        st.error(f"MLP model not loaded: {art_err}")
         st.info("Place model artifacts in `results/` (export from the Colab notebook).")
         return
 
     if xgb_err:
-        st.warning(f"⚠️ XGBoost not available ({xgb_err}). Running in **MLP-only** mode.")
+        st.warning(f"XGBoost not available ({xgb_err}). Running in **MLP-only** mode.")
 
     config = artifacts["config"]
 
@@ -694,13 +694,13 @@ def page_live_prediction() -> None:
     )
 
     if uploaded is None:
-        st.info("📤 Upload a CSV file to run predictions.")
+        st.info("Upload a CSV file to run predictions.")
         return
 
     try:
         df_raw = pd.read_csv(uploaded)
     except ParserError as pe:
-        st.error("❌ Invalid CSV format (column count mismatch).")
+        st.error("Invalid CSV format (column count mismatch).")
         st.caption(
         "Please ensure every row has the same number of columns as the header, "
         "and fields containing commas are quoted."
@@ -708,7 +708,7 @@ def page_live_prediction() -> None:
         st.code(str(pe))
         return
     except Exception as e:
-        st.error(f"❌ Failed to read CSV: {e}")
+        st.error(f"Failed to read CSV: {e}")
         return
 
     st.subheader("Input Preview")
@@ -771,7 +771,7 @@ def page_live_prediction() -> None:
             out["Models_Agree"] = out["MLP_Flag"] == out["XGB_Flag"]
 
         # Summary statistics
-        st.subheader("📊 Summary Statistics")
+        st.subheader("Summary Statistics")
         if xgb_probs is not None:
             agree_count = int(out["Models_Agree"].sum())
             disagree_count = len(out) - agree_count
@@ -785,7 +785,7 @@ def page_live_prediction() -> None:
             c5.metric("Agreement Rate", f"{agree_rate:.1f}%")
 
             if disagree_count > 0:
-                st.subheader(f"⚡ Model Disagreements ({disagree_count} transactions)")
+                st.subheader(f"Model Disagreements ({disagree_count} transactions)")
                 st.caption("Transactions where MLP and XGBoost give different flag decisions.")
                 disagree_df = out[~out["Models_Agree"]].copy()
                 st.dataframe(disagree_df.head(30), use_container_width=True)
@@ -798,14 +798,14 @@ def page_live_prediction() -> None:
                 help=f"Cutoff: {mlp_cutoff:.4f}" if np.isfinite(mlp_cutoff) else None,
             )
 
-        st.subheader("📋 All Predictions (first 50 rows)")
+        st.subheader("All Predictions (first 50 rows)")
         st.dataframe(out.head(50), use_container_width=True)
 
-        st.subheader("🏆 Top 20 Highest-Risk Transactions")
+        st.subheader("Top 20 Highest-Risk Transactions")
         st.dataframe(out.sort_values("MLP_Probability", ascending=False).head(20), use_container_width=True)
 
         st.download_button(
-            "⬇️ Download All Predictions (CSV)",
+            "Download All Predictions (CSV)",
             data=out.to_csv(index=False).encode("utf-8"),
             file_name="predictions_comparison.csv",
             mime="text/csv",
@@ -821,21 +821,21 @@ def page_live_prediction() -> None:
 def _risk_level(prob: float) -> tuple[str, str]:
     """Return (display_label, streamlit_alert_type) for a fraud probability."""
     if prob < 0.20:
-        return "🟢 Low Risk", "success"
+        return "Low Risk", "success"
     if prob < 0.50:
-        return "🟡 Medium Risk", "warning"
+        return "Medium Risk", "warning"
     if prob < 0.75:
-        return "🟠 High Risk", "error"
-    return "🔴 Critical Risk", "error"
+        return "High Risk", "error"
+    return "Critical Risk", "error"
 
 
 def page_single_transaction() -> None:
-    st.title("🎯 Single Transaction Scorer")
+    st.title("Single Transaction Scorer")
     st.markdown("Enter transaction details and get fraud risk scores from all available models.")
 
     artifacts, art_err = load_artifacts()
     if artifacts is None:
-        st.error(f"❌ MLP model not loaded: {art_err}")
+        st.error(f"MLP model not loaded: {art_err}")
         st.info("Place model artifacts in `results/` (export from the Colab notebook).")
         return
 
@@ -865,7 +865,7 @@ def page_single_transaction() -> None:
             )
             mc_T = st.slider("MC Dropout samples (T)", 5, 50, 20)
 
-        submitted = st.form_submit_button("🔍 Score Transaction", use_container_width=True)
+        submitted = st.form_submit_button("Score Transaction", use_container_width=True)
 
     if not submitted:
         return
@@ -898,11 +898,11 @@ def page_single_transaction() -> None:
         mlp_prob = float(mlp_probs[0])
         mlp_uncertainty = float(mlp_var[0]) if mlp_var is not None else None
 
-        st.subheader("🎯 Results")
+        st.subheader("Results")
         col_mlp, col_xgb = st.columns(2)
 
         with col_mlp:
-            st.markdown("### 🧠 MLP (Deep Learning)")
+            st.markdown("### MLP (Deep Learning)")
             mlp_risk_label, mlp_risk_type = _risk_level(mlp_prob)
             st.metric("Fraud Probability", f"{mlp_prob:.1%}")
             if mlp_uncertainty is not None:
@@ -929,25 +929,18 @@ def page_single_transaction() -> None:
                     xgb_prob = float(xgb_model.predict(xgb.DMatrix(X_df, feature_names=artifacts["feature_input_cols"]))[0])
 
                     xgb_risk_label, xgb_risk_type = _risk_level(xgb_prob)
-                    st.markdown("### 🌳 XGBoost (Traditional ML)")
+                    st.markdown("### XGBoost (Traditional ML)")
                     st.metric("Fraud Probability", f"{xgb_prob:.1%}")
                     st.progress(min(xgb_prob, 1.0), text=xgb_risk_label)
                     getattr(st, xgb_risk_type)(f"Assessment: {xgb_risk_label}")
 
-                    ensemble_prob = 0.6 * xgb_prob + 0.4 * mlp_prob
-                    ens_risk_label, ens_risk_type = _risk_level(ensemble_prob)
-                    st.markdown("### 🎯 Ensemble (0.6×XGB + 0.4×MLP)")
-                    st.metric("Ensemble Fraud Probability", f"{ensemble_prob:.1%}")
-                    st.progress(min(ensemble_prob, 1.0), text=ens_risk_label)
-                    getattr(st, ens_risk_type)(f"Assessment: {ens_risk_label}")
-
                 except Exception as xe:
                     st.warning(f"XGBoost scoring failed: {xe}")
             else:
-                st.info(f"ℹ️ XGBoost not available: {xgb_err}")
+                st.info(f"XGBoost not available: {xgb_err}")
 
         if mlp_uncertainty is not None:
-            with st.expander("📊 Uncertainty Analysis (MC-Dropout)"):
+            with st.expander("Uncertainty Analysis (MC-Dropout)"):
                 std_dev = float(np.sqrt(mlp_uncertainty))
                 conf_level = "High" if mlp_uncertainty < 0.01 else ("Medium" if mlp_uncertainty < 0.05 else "Low")
                 st.write(f"**Mean Fraud Probability:** {mlp_prob:.4f}")
@@ -967,13 +960,13 @@ def page_single_transaction() -> None:
 # Page 5: Drift Analysis
 # =========================
 def page_drift_analysis() -> None:
-    st.title("📈 Drift Analysis")
+    st.title("Drift Analysis")
     st.markdown("How models perform across time windows and where ADWIN detects concept drift.")
 
     drift_data, is_sample = _load_results_json("drift_analysis.json")
 
     if drift_data is None:
-        st.warning("⚠️ `results/drift_analysis.json` not found.")
+        st.warning("`results/drift_analysis.json` not found.")
         st.info(
             "To generate drift analysis data:\n"
             "1. Run the streaming simulation in your Colab notebook.\n"
@@ -984,7 +977,7 @@ def page_drift_analysis() -> None:
 
     if is_sample:
         st.info(
-            "ℹ️ Showing **sample / placeholder data**. "
+            "Showing **sample / placeholder data**. "
             "Export real drift analysis from your Colab notebook with `export_metrics.py`."
         )
 
@@ -1010,7 +1003,7 @@ def page_drift_analysis() -> None:
     df_drift = pd.DataFrame(records)
 
     # ROC-AUC over time
-    st.subheader("📊 ROC-AUC Over Time")
+    st.subheader("ROC-AUC Over Time")
     if HAS_PLOTLY:
         fig_roc = go.Figure()
         for idx, model_name in enumerate(df_drift["Model"].unique()):
@@ -1045,7 +1038,7 @@ def page_drift_analysis() -> None:
         st.line_chart(pivot)
 
     # PR-AUC over time
-    st.subheader("📊 PR-AUC Over Time")
+    st.subheader("PR-AUC Over Time")
     if HAS_PLOTLY:
         fig_pr = go.Figure()
         for idx, model_name in enumerate(df_drift["Model"].unique()):
@@ -1074,17 +1067,17 @@ def page_drift_analysis() -> None:
 
     # Drift events table
     if drift_events:
-        st.subheader("🚨 Detected Drift Events (ADWIN)")
+        st.subheader("Detected Drift Events (ADWIN)")
         st.dataframe(pd.DataFrame(drift_events), use_container_width=True)
 
-    st.subheader("💡 Analysis")
+    st.subheader("Analysis")
     st.markdown(
         """
         **Key observations:**
-        - 🔄 **Concept Drift** (red dashed lines) causes performance degradation in static models over time.
-        - ⚡ **Adaptive XGBoost** with ADWIN drift detection recovers faster after drift events.
-        - 🧠 **MLP** maintains more stable performance than static XGBoost under drift.
-        - 🎯 **ADWIN** flags significant distribution shifts, triggering targeted model updates.
+        - **Concept Drift** (red dashed lines) causes performance degradation in static models over time.
+        - **Adaptive XGBoost** with ADWIN drift detection recovers faster after drift events.
+        - **MLP** maintains more stable performance than static XGBoost under drift.
+        - **ADWIN** flags significant distribution shifts, triggering targeted model updates.
         """
     )
 
@@ -1094,24 +1087,24 @@ def page_drift_analysis() -> None:
 # =========================
 st.set_page_config(
     page_title="Fraud Detection Dashboard",
-    page_icon="🛡️",
+    page_icon="FD",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
 with st.sidebar:
-    st.title("🛡️ Fraud Detection")
+    st.title("Fraud Detection")
     st.caption("Traditional ML vs. Deep Learning")
     st.divider()
 
     page = st.radio(
         "Navigate to:",
         [
-            "🏠 Project Overview",
-            "📊 Model Performance",
-            "🔍 Live Prediction",
-            "🎯 Single Transaction",
-            "📈 Drift Analysis",
+            "Project Overview",
+            "Model Performance",
+            "Live Prediction",
+            "Single Transaction",
+            "Drift Analysis",
         ],
         label_visibility="collapsed",
     )
@@ -1119,13 +1112,13 @@ with st.sidebar:
     st.divider()
     st.caption(f"Artifacts: `{ART_DIR}`")
 
-if page == "🏠 Project Overview":
+if page == "Project Overview":
     page_overview()
-elif page == "📊 Model Performance":
+elif page == "Model Performance":
     page_model_performance()
-elif page == "🔍 Live Prediction":
+elif page == "Live Prediction":
     page_live_prediction()
-elif page == "🎯 Single Transaction":
+elif page == "Single Transaction":
     page_single_transaction()
-elif page == "📈 Drift Analysis":
+elif page == "Drift Analysis":
     page_drift_analysis()
