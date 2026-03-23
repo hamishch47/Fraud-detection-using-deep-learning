@@ -1,54 +1,50 @@
-{
-  "_note": "Sample placeholder data. Export real metrics from Colab notebook using export_metrics.py.",
-  "_sample": true,
-  "models": {
-    "XGBoost": {
-      "roc_auc": 0.7781,
-      "pr_auc": 0.1790,
-      "recall_at_5pct_fpr": 0.42,
-      "f1_score": 0.35,
-      "precision": 0.38,
-      "recall": 0.33
-    },
-    "Random Forest": {
-      "roc_auc": 0.7420,
-      "pr_auc": 0.1450,
-      "recall_at_5pct_fpr": 0.38,
-      "f1_score": 0.31,
-      "precision": 0.34,
-      "recall": 0.28
-    },
-    "Logistic Regression": {
-      "roc_auc": 0.7210,
-      "pr_auc": 0.1180,
-      "recall_at_5pct_fpr": 0.30,
-      "f1_score": 0.27,
-      "precision": 0.30,
-      "recall": 0.24
-    },
-    "LightGBM": {
-      "roc_auc": 0.7680,
-      "pr_auc": 0.1720,
-      "recall_at_5pct_fpr": 0.40,
-      "f1_score": 0.33,
-      "precision": 0.36,
-      "recall": 0.31
-    },
-    "MLP Static": {
-      "roc_auc": 0.7555,
-      "pr_auc": 0.1321,
-      "recall_at_5pct_fpr": 0.35,
-      "f1_score": 0.29,
-      "precision": 0.32,
-      "recall": 0.27
-    },
-    "Ensemble": {
-      "roc_auc": 0.8500,
-      "pr_auc": 0.2500,
-      "recall_at_5pct_fpr": 0.55,
-      "f1_score": 0.45,
-      "precision": 0.50,
-      "recall": 0.41
-    }
+[
+  {
+    "Model": "Random Forest",
+    "ROC-AUC": 0.8602442905213131,
+    "PR-AUC": 0.412341248822143,
+    "Recall@5%FPR": 0.5249567723342939
+  },
+  {
+    "Model": "LightGBM",
+    "ROC-AUC": 0.8213670521069091,
+    "PR-AUC": 0.41022152589589367,
+    "Recall@5%FPR": 0.514121037463977
+  },
+  {
+    "Model": "MLP Adaptive",
+    "ROC-AUC": 0.8197415577838502,
+    "PR-AUC": 0.22002603449715502,
+    "Recall@5%FPR": 0.3923029174425822
+  },
+  {
+    "Model": "Logistic Regression",
+    "ROC-AUC": 0.8172989695988792,
+    "PR-AUC": 0.18636384633541533,
+    "Recall@5%FPR": 0.37095100864553315
+  },
+  {
+    "Model": "Ensemble",
+    "ROC-AUC": 0.8165531164937979,
+    "PR-AUC": 0.4036653347820394,
+    "Recall@5%FPR": 0.5077809798270894
+  },
+  {
+    "Model": "XGBoost",
+    "ROC-AUC": 0.8083342200848826,
+    "PR-AUC": 0.4059236470681148,
+    "Recall@5%FPR": 0.5136599423631124
+  },
+  {
+    "Model": "MLP Static",
+    "ROC-AUC": 0.7957224384440353,
+    "PR-AUC": 0.27348661385181106,
+    "Recall@5%FPR": 0.3943515850144092
+  },
+  {
+    "Model": "SGD Logistic Regression",
+    "ROC-AUC": 0.690025182528146,
+    "PR-AUC": 0.13548697662484122,
+    "Recall@5%FPR": 0.32449567723342937
   }
-}
+]
