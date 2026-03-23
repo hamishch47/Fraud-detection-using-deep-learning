@@ -4,6 +4,7 @@
 Comparing Traditional ML vs. Deep Learning for Credit Card Fraud Detection
 (IEEE-CIS Dataset)
 """
+from __future__ import annotations
 
 import json
 import os
@@ -161,7 +162,7 @@ def load_artifacts() -> tuple[Optional[dict], Optional[str]]:
                 config = json.load(f)
 
         model = ImprovedMLP(input_dim=len(feature_input_cols))
-        state = torch.load(mlp_path, map_location="cpu")
+        state = torch.load(mlp_path, map_location="cpu", weights_only=True)
         model.load_state_dict(state)
         model.eval()
 
