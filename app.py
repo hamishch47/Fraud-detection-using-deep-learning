@@ -1,9 +1,14 @@
 # -*- coding: utf-8 -*-
-"""Fraud Detection Dashboard — Multi-page Streamlit App
+"""Fraud Detection Dashboard — Simple, Human-in-the-Loop Streamlit App
 
-Comparing Traditional ML vs. Deep Learning for Credit Card Fraud Detection
-(IEEE-CIS Dataset)
+Designed for non-technical users:
+- Clear language
+- Guided actions
+- Confidence/uncertainty signaling
+- Manual review queue
+- Explainability panel
 """
+
 from __future__ import annotations
 
 import json
@@ -11,9 +16,18 @@ import os
 import pickle
 from pathlib import Path
 import sys
-from typing import Optional
+from typing import Optional, Any
 
+import numpy as np
+import pandas as pd
+from pandas.errors import ParserError
+import streamlit as st
+import torch
+import torch.nn as nn
 
+# -------------------------
+# Runtime environment helper
+# -------------------------
 def _ensure_workspace_venv() -> None:
     """Relaunch with .venv interpreter when started from another environment."""
     app_path = Path(__file__).resolve()
@@ -38,40 +52,34 @@ def _ensure_workspace_venv() -> None:
 
 _ensure_workspace_venv()
 
-import numpy as np
-import pandas as pd
-from pandas.errors import ParserError
-import streamlit as st
-import torch
-import torch.nn as nn
-
+# -------------------------
+# Optional dependencies
+# -------------------------
 try:
     import joblib
 except ImportError:
     class _JoblibCompat:
-        """Minimal fallback interface when joblib is unavailable."""
-
         @staticmethod
         def load(path):
             with open(path, "rb") as f:
                 return pickle.load(f)
-
     joblib = _JoblibCompat()
 
 try:
     import plotly.express as px
     import plotly.graph_objects as go
-
     HAS_PLOTLY = True
 except ImportError:
     HAS_PLOTLY = False
 
-# =========================
-# Artifact paths — local relative path takes priority over Colab path
-# =========================
+# -------------------------
+# Paths
+# -------------------------
 REPO_DIR = Path(__file__).parent
 LOCAL_ART_DIR = REPO_DIR / "results"
 COLAB_ART_DIR = Path("/content/drive/MyDrive/Colab_Notebooks/fraud_app/results")
+FEEDBACK_DIR = REPO_DIR / "feedback"
+FEEDBACK_DIR.mkdir(exist_ok=True)
 
 
 def _resolve_art_dir() -> Path:
@@ -84,9 +92,10 @@ def _resolve_art_dir() -> Path:
 
 ART_DIR = _resolve_art_dir()
 
-# =========================
-# Model definition (MUST match your notebook)
-# =========================
+
+# -------------------------
+# Model definition
+# -------------------------
 class ImprovedMLP(nn.Module):
     def __init__(self, input_dim: int):
         super().__init__()
@@ -124,16 +133,16 @@ def mc_predict(model: nn.Module, X: torch.Tensor, T: int = 20):
     return probs.mean(axis=0).reshape(-1), probs.var(axis=0).reshape(-1)
 
 
-# =========================
-# Load MLP artifacts
-# =========================
+# -------------------------
+# Artifact loading
+# -------------------------
 @st.cache_resource
 def load_artifacts() -> tuple[Optional[dict], Optional[str]]:
-    """Load MLP model artifacts. Returns (artifacts_dict, error_msg)."""
+    """Load MLP artifacts. Returns (artifact_dict, error)."""
     try:
         mlp_path = ART_DIR / "mlp_state_dict.pt"
         if not mlp_path.exists():
-            return None, f"MLP model not found at {mlp_path}. Please export artifacts from the Colab notebook."
+            return None, f"MLP model not found at: {mlp_path}"
 
         feature_input_cols = joblib.load(ART_DIR / "feature_input_cols.pkl")
         te = joblib.load(ART_DIR / "target_encoder.pkl")
@@ -177,32 +186,32 @@ def load_artifacts() -> tuple[Optional[dict], Optional[str]]:
             "card_stats": card_stats,
             "model": model,
         }, None
-
     except Exception as e:
         return None, str(e)
 
 
 @st.cache_resource
 def load_xgb_model() -> tuple[Optional[object], Optional[str]]:
-    """Load XGBoost model if available. Returns (booster, error_msg)."""
+    """Load XGBoost model if available. Returns (model, error)."""
     try:
         import xgboost as xgb
 
         model_path = ART_DIR / "xgb_model.json"
         if not model_path.exists():
-            return None, f"XGBoost model file not found at {model_path}"
+            return None, f"XGBoost model file not found at: {model_path}"
+
         booster = xgb.Booster()
         booster.load_model(str(model_path))
         return booster, None
     except ImportError:
-        return None, "xgboost package not installed (pip install xgboost)"
+        return None, "xgboost is not installed"
     except Exception as e:
         return None, str(e)
 
 
-# =========================
-# Preprocessing (mirrors notebook logic)
-# =========================
+# -------------------------
+# Preprocessing
+# -------------------------
 def preprocess_raw_to_features(
     df_raw: pd.DataFrame,
     te,
@@ -234,7 +243,7 @@ def preprocess_raw_to_features(
         if c in df.columns:
             df[c] = df[c].astype("object").fillna("missing")
 
-    # Numeric fill using saved medians when available
+    # Numeric fill
     for col, med in medians.items():
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(med)
@@ -244,7 +253,7 @@ def preprocess_raw_to_features(
     if present_cat:
         df[present_cat] = te.transform(df[present_cat])
 
-    # Card aggregations
+    # Card stats
     for card_col in ["card1", "card2", "card3"]:
         if card_col in df.columns and card_col in card_stats:
             stats = card_stats[card_col]
@@ -252,7 +261,7 @@ def preprocess_raw_to_features(
             df[f"{card_col}_fraud_rate"] = df[f"{card_col}_fraud_rate"].fillna(target_mean)
             df[f"{card_col}_count"] = df[f"{card_col}_count"].fillna(0)
 
-    # PCA for V columns
+    # PCA on V columns
     v_cols = [c for c in df.columns if c.startswith("V")]
     if not v_cols:
         raise ValueError("No V* columns found. Upload must include V1..V339.")
@@ -285,45 +294,12 @@ def align_and_scale(df_feat: pd.DataFrame, feature_input_cols: list[str], scaler
     return scaler.transform(X)
 
 
-def flag_top_percent(probs: np.ndarray, top_percent: float) -> tuple[np.ndarray, float]:
-    """Flag the top `top_percent` fraction (e.g., 5.0 -> top 5%)."""
-    if len(probs) == 0:
-        return np.array([], dtype=int), float("nan")
-    top_percent = max(0.0, min(100.0, top_percent))
-    if top_percent <= 0.0:
-        return np.zeros_like(probs, dtype=int), float("inf")
-    if top_percent >= 100.0:
-        return np.ones_like(probs, dtype=int), float("-inf")
-    cutoff = float(np.quantile(probs, 1.0 - (top_percent / 100.0)))
-    return (probs >= cutoff).astype(int), cutoff
-
-
-def build_compact_output(
-    df_raw: pd.DataFrame,
-    probs: np.ndarray,
-    flags: np.ndarray,
-    var: np.ndarray | None = None,
-) -> pd.DataFrame:
-    out = pd.DataFrame()
-    if "TransactionID" in df_raw.columns:
-        out["TransactionID"] = df_raw["TransactionID"]
-    for c in ["TransactionDT", "TransactionAmt", "ProductCD", "card1", "card4", "DeviceType"]:
-        if c in df_raw.columns:
-            out[c] = df_raw[c]
-    out["fraud_probability"] = probs
-    if var is not None:
-        out["uncertainty_variance"] = var
-    out["fraud_flag"] = flags
-    return out
-
-
 def run_mlp_inference(
     artifacts: dict,
     df_raw: pd.DataFrame,
-    use_mc: bool = False,
+    use_mc: bool = True,
     T: int = 20,
 ) -> tuple[np.ndarray, np.ndarray | None]:
-    """Run MLP inference on a DataFrame. Returns (probs, variance_or_None)."""
     df_feat = preprocess_raw_to_features(
         df_raw,
         artifacts["te"],
@@ -334,774 +310,182 @@ def run_mlp_inference(
     )
     Xs = align_and_scale(df_feat, artifacts["feature_input_cols"], artifacts["scaler"])
     Xt = torch.tensor(Xs, dtype=torch.float32)
+
     if use_mc:
         return mc_predict(artifacts["model"], Xt, T=T)
+
     with torch.no_grad():
         probs = torch.sigmoid(artifacts["model"](Xt)).numpy().reshape(-1)
     return probs, None
 
 
-# =========================
-# Helper: load a results JSON file
-# =========================
-def _load_results_json(filename: str) -> tuple[Optional[dict], bool]:
-    """Load a JSON file from the results directory. Returns (data, is_sample)."""
-    path = ART_DIR / filename
-    if path.exists():
-        with open(path) as f:
-            data = json.load(f)
-        return data, bool(data.get("_sample", False))
-    return None, True
+# -------------------------
+# UI helpers
+# -------------------------
+def risk_band(prob: float) -> str:
+    if prob < 0.20:
+        return "Low"
+    if prob < 0.50:
+        return "Medium"
+    if prob < 0.75:
+        return "High"
+    return "Critical"
 
 
-# =========================
-# Page 1: Project Overview
-# =========================
-def page_overview() -> None:
-    st.title("🏦 Fraud Detection Command Center")
-    st.markdown(
-        """
-        Welcome! This dashboard helps your team **detect and prevent credit card fraud** in real time.
-
-        Use the sidebar on the left to navigate between tools. No technical knowledge is required.
-        """
-    )
-
-    st.info(
-        "💡 **Quick Guide:** Use **Live Transaction Monitor** to screen a batch of transactions, "
-        "**Investigate Transaction** to check a single payment, **System Adaptation** to see how "
-        "the AI adjusts to new fraud tactics, and **System Health** to review overall AI performance."
-    )
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.subheader("🤖 How the AI Works")
-        st.markdown(
-            """
-            The system uses **multiple AI engines** cross-checking every transaction:
-
-            - **Pattern Engine (XGBoost)** — learns from millions of past transactions to spot known fraud patterns
-            - **Deep Learning Engine (Neural Network)** — finds complex hidden relationships in transaction data
-            - **Combined Decision (Ensemble)** — merges both engines for the most reliable verdict
-
-            When engines agree, you can act with confidence. When they disagree, a manual review is recommended.
-            """
-        )
-
-    with col2:
-        st.subheader("⚠️ Why Fraud Is Hard to Catch")
-        st.markdown(
-            """
-            **Scale:** 590,540 transactions analysed — only ~3.5% are fraudulent.
-
-            **Key Challenges the AI handles:**
-            1. **Evolving Tactics** — fraudsters change behaviour; the AI continuously adapts
-            2. **Confirmation Delays** — some fraud is only confirmed days later
-            3. **Rare Events** — with so few fraud cases, the AI is tuned to avoid missing them
-            """
-        )
-
-    st.subheader("📊 AI Engine Performance at a Glance")
-    perf_data = {
-        "AI Engine": ["Pattern Engine (XGBoost)", "Deep Learning Engine (Neural Network)", "Combined Decision (Ensemble, expected)"],
-        "Overall Accuracy (ROC-AUC)": [0.7781, 0.7555, ">0.85"],
-        "Fraud Catch Rate (PR-AUC)": [0.1790, 0.1321, ">0.25"],
-    }
-    st.table(pd.DataFrame(perf_data))
-
-    with st.expander("🔬 View Technical Details"):
-        col3, col4 = st.columns(2)
-        with col3:
-            st.markdown(
-                """
-                **Feature Engineering:**
-                - 350+ features including V-columns, C-columns
-                - Time-based & amount-based features
-                - Card aggregation features
-                - Target encoding for categoricals
-                - PCA dimensionality reduction on V-columns
-                """
-            )
-        with col4:
-            st.markdown(
-                """
-                **Adaptive Learning Pipeline:**
-                - Streaming simulation via `TransactionDT`
-                - Delayed label queue (verification latency)
-                - Online incremental training (replay buffer)
-                - ADWIN drift detector for adaptation triggers
-                - Early stopping & LR scheduling for MLP
-                """
-            )
+def action_recommendation(prob: float, uncertain: bool) -> str:
+    if uncertain:
+        return "Send for manual review"
+    if prob < 0.20:
+        return "Approve"
+    if prob < 0.50:
+        return "Manual review"
+    return "Block"
 
 
-# =========================
-# Page 2: System Health (Model Performance Comparison)
-# =========================
-_CHART_COLORS = ["#3498db", "#e67e22", "#9b59b6", "#1abc9c", "#e74c3c", "#2ecc71"]
-_CATEGORY_COLOR_MAP = {
-    "Traditional ML": "#3498db",
-    "Deep Learning": "#e74c3c",
-    "Ensemble": "#2ecc71",
-}
-_TRADITIONAL_MODELS = {"XGBoost", "Random Forest", "Logistic Regression", "LightGBM"}
-_DL_MODELS = {"MLP Static"}
-
-# Friendly display names for AI engines
-_ENGINE_DISPLAY_NAMES = {
-    "XGBoost": "Pattern Engine (XGBoost)",
-    "Random Forest": "Balanced Forest Engine",
-    "Logistic Regression": "Baseline Engine",
-    "LightGBM": "Fast Pattern Engine (LightGBM)",
-    "MLP Static": "Deep Learning Engine",
-    "Ensemble": "Combined Decision Engine",
-}
+def confidence_label(var_value: float | None) -> str:
+    if var_value is None:
+        return "Not available"
+    if var_value < 0.010:
+        return "High"
+    if var_value < 0.050:
+        return "Medium"
+    return "Low"
 
 
-def _model_display_name(name: str) -> str:
-    return _ENGINE_DISPLAY_NAMES.get(name, name)
+def explain_transaction(row: pd.Series) -> list[str]:
+    reasons = []
+
+    amt = float(row.get("TransactionAmt", 0))
+    if amt > 1000:
+        reasons.append("Transaction amount is relatively high.")
+
+    hour = int((row.get("TransactionDT", 0) // 3600) % 24) if "TransactionDT" in row else 12
+    if hour <= 5 or hour >= 23:
+        reasons.append("Transaction time is outside typical daytime hours.")
+
+    if str(row.get("DeviceType", "missing")).lower() in {"missing", "mobile"}:
+        reasons.append("Device pattern is less consistent with known low-risk behavior.")
+
+    if str(row.get("card4", "")).lower() in {"discover", "american express"}:
+        reasons.append("Card network pattern is less common in this dataset profile.")
+
+    if not reasons:
+        reasons.append("No single factor dominates; decision comes from combined pattern signals.")
+    return reasons[:4]
 
 
-def _model_category(name: str) -> str:
-    if name in _TRADITIONAL_MODELS:
-        return "Traditional ML"
-    if name in _DL_MODELS:
-        return "Deep Learning"
-    return "Ensemble"
+def ensure_session_state() -> None:
+    if "review_queue" not in st.session_state:
+        st.session_state.review_queue = pd.DataFrame()
+    if "review_history" not in st.session_state:
+        st.session_state.review_history = pd.DataFrame(columns=[
+            "TransactionID",
+            "risk_score",
+            "risk_band",
+            "recommended_action",
+            "review_decision",
+            "review_notes",
+            "reviewer",
+            "timestamp",
+        ])
 
 
-def page_model_performance() -> None:
-    st.title("⚙️ System Health")
-    st.markdown(
-        "This page shows how well each AI engine is performing at detecting fraud. "
-        "Higher scores mean the engine catches more fraud while raising fewer false alarms."
-    )
-
-    st.info(
-        "📖 **Reading these scores:** An **Overall Accuracy** score close to 1.0 (or 100%) means the AI "
-        "is very good at distinguishing fraud from legitimate transactions across the full range of risk "
-        "thresholds. A **Fraud Catch Rate** close to 1.0 means it rarely misses actual fraud — "
-        "particularly important because real fraud is rare (only ~3.5% of transactions)."
-    )
-
-    metrics_data, is_sample = _load_results_json("metrics_comparison.json")
-
-    if metrics_data is None:
-        st.warning(
-            "Performance data not yet available. "
-            "Ask your technical team to run `export_metrics.py` to generate the results."
-        )
-        return
-
-    if is_sample:
-        st.info(
-            "ℹ️ Showing **illustrative sample data**. "
-            "Ask your technical team to export real metrics to see actual system performance."
-        )
-
-    models: dict = metrics_data.get("models", {})
-    if not models:
-        st.error("No AI engine data found. Please contact your technical team.")
-        return
-
-    # Build metrics DataFrame with friendly column names
-    rows = []
-    for model_name, m in models.items():
-        rows.append(
-            {
-                "AI Engine": _model_display_name(model_name),
-                "Engine Type": _model_category(model_name),
-                "Overall Accuracy": float(m.get("roc_auc", 0)),
-                "Fraud Catch Rate": float(m.get("pr_auc", 0)),
-                "Fraud Detection Rate": float(m.get("recall_at_5pct_fpr", 0)),
-                "Balanced Score": float(m.get("f1_score", 0)),
-                "Precision": float(m.get("precision", 0)),
-                "Recall": float(m.get("recall", 0)),
-            }
-        )
-    df_metrics = pd.DataFrame(rows)
-
-    # --- Summary scorecards ---
-    st.subheader("📊 Engine Performance Scorecards")
-    metric_cols_display = ["Overall Accuracy", "Fraud Catch Rate", "Fraud Detection Rate", "Balanced Score"]
-
-    if HAS_PLOTLY:
-        chart_cols = st.columns(2)
-        for i, metric in enumerate(metric_cols_display):
-            fig = px.bar(
-                df_metrics,
-                x="AI Engine",
-                y=metric,
-                color="Engine Type",
-                color_discrete_map=_CATEGORY_COLOR_MAP,
-                title=f"{metric} by Engine",
-                text=metric,
-            )
-            fig.update_traces(texttemplate="%{text:.3f}", textposition="outside")
-            fig.update_layout(height=350, showlegend=(i == 0), yaxis_range=[0, 1.05])
-            chart_cols[i % 2].plotly_chart(fig, use_container_width=True)
+def add_to_review_queue(df: pd.DataFrame) -> None:
+    ensure_session_state()
+    if st.session_state.review_queue.empty:
+        st.session_state.review_queue = df.copy()
     else:
-        st.bar_chart(df_metrics.set_index("AI Engine")[metric_cols_display])
-
-    # --- Summary table ---
-    st.subheader("📋 Full Performance Summary")
-    display_cols = ["AI Engine", "Engine Type", "Overall Accuracy", "Fraud Catch Rate", "Fraud Detection Rate", "Balanced Score"]
-    st.dataframe(
-        df_metrics[display_cols]
-        .sort_values("Overall Accuracy", ascending=False)
-        .reset_index(drop=True)
-        .style.highlight_max(
-            subset=["Overall Accuracy", "Fraud Catch Rate", "Fraud Detection Rate", "Balanced Score"],
-            color="lightgreen",
-        ),
-        use_container_width=True,
-    )
-
-    # --- Key takeaways ---
-    st.subheader("✅ What This Means for Your Team")
-    best_idx = df_metrics["Overall Accuracy"].idxmax()
-    best_engine = df_metrics.loc[best_idx, "AI Engine"]
-    best_score = df_metrics.loc[best_idx, "Overall Accuracy"]
-    st.success(
-        f"**Top Performing Engine: {best_engine}** (Overall Accuracy: {best_score:.1%})\n\n"
-        "- The **Combined Decision Engine** delivers the best results by merging the strengths of "
-        "both the Pattern Engine and the Deep Learning Engine.\n"
-        "- The **Pattern Engine (XGBoost)** is the most reliable single-engine option, especially "
-        "because it automatically adapts when new fraud tactics emerge.\n"
-        "- The **Deep Learning Engine** provides a confidence level for each decision, which is "
-        "useful when you need to know how certain the AI is.\n"
-        "- The **Fast Pattern Engine (LightGBM)** offers a quick alternative with competitive accuracy."
-    )
-
-    with st.expander("🔬 View Technical Charts (ROC & Precision-Recall Curves)"):
-        # --- ROC Curves ---
-        st.subheader("Receiver Operating Characteristic (ROC) Curves")
-        st.caption(
-            "Each curve shows how well an engine separates fraud from legitimate transactions "
-            "at different sensitivity settings. Curves closer to the top-left corner are better."
-        )
-        roc_data, _ = _load_results_json("roc_curves.json")
-        if roc_data and HAS_PLOTLY:
-            fig_roc = go.Figure()
-            for idx, (model_name, curve) in enumerate(roc_data.get("models", {}).items()):
-                auc_val = models.get(model_name, {}).get("roc_auc")
-                label = f"{_model_display_name(model_name)} (Accuracy Score={auc_val:.3f})" if auc_val is not None else _model_display_name(model_name)
-                fig_roc.add_trace(
-                    go.Scatter(
-                        x=curve["fpr"],
-                        y=curve["tpr"],
-                        mode="lines",
-                        name=label,
-                        line=dict(color=_CHART_COLORS[idx % len(_CHART_COLORS)], width=2),
-                    )
-                )
-            fig_roc.add_trace(
-                go.Scatter(
-                    x=[0, 1],
-                    y=[0, 1],
-                    mode="lines",
-                    name="Random Guessing (baseline)",
-                    line=dict(dash="dash", color="gray"),
-                )
-            )
-            fig_roc.update_layout(
-                title="Detection Performance Curves — All Engines",
-                xaxis_title="False Alarm Rate",
-                yaxis_title="Fraud Catch Rate",
-                height=450,
-                legend=dict(x=0.55, y=0.05),
-            )
-            st.plotly_chart(fig_roc, use_container_width=True)
-        elif roc_data:
-            st.info("Install plotly for interactive charts: `pip install plotly`")
-        else:
-            st.warning("Detailed curve data not yet available.")
-
-        # --- PR Curves ---
-        st.subheader("Precision vs. Catch-Rate Curves")
-        st.caption(
-            "Shows the trade-off between catching more fraud (higher catch rate) and "
-            "raising fewer false alarms (higher precision). Curves closer to the top-right are better."
-        )
-        pr_data, _ = _load_results_json("pr_curves.json")
-        if pr_data and HAS_PLOTLY:
-            fig_pr = go.Figure()
-            for idx, (model_name, curve) in enumerate(pr_data.get("models", {}).items()):
-                pr_auc_val = models.get(model_name, {}).get("pr_auc")
-                label = f"{_model_display_name(model_name)} (Catch Rate Score={pr_auc_val:.3f})" if pr_auc_val is not None else _model_display_name(model_name)
-                fig_pr.add_trace(
-                    go.Scatter(
-                        x=curve["recall"],
-                        y=curve["precision"],
-                        mode="lines",
-                        name=label,
-                        line=dict(color=_CHART_COLORS[idx % len(_CHART_COLORS)], width=2),
-                    )
-                )
-            fig_pr.update_layout(
-                title="Precision vs. Catch-Rate — All Engines",
-                xaxis_title="Fraud Catch Rate",
-                yaxis_title="Precision (Low False Alarm Rate)",
-                height=450,
-                legend=dict(x=0.55, y=0.85),
-            )
-            st.plotly_chart(fig_pr, use_container_width=True)
-        elif pr_data:
-            st.info("Install plotly for interactive charts.")
-        else:
-            st.warning("Detailed curve data not yet available.")
-
-        # --- Confusion Matrices ---
-        st.subheader("Decision Outcome Grids")
-        st.caption(
-            "Shows how many transactions each engine correctly identified vs. misclassified. "
-            "Ideally, the top-left (Legitimate → Legitimate) and bottom-right (Fraud → Fraud) cells should be large."
-        )
-        cm_data, _ = _load_results_json("confusion_matrices.json")
-        if cm_data and HAS_PLOTLY:
-            cm_models = list(cm_data.get("models", {}).items())
-            n_grid_cols = 3
-            cm_col_groups = [cm_models[i : i + n_grid_cols] for i in range(0, len(cm_models), n_grid_cols)]
-            for group in cm_col_groups:
-                cols = st.columns(n_grid_cols)
-                for col_idx, (model_name, cm) in enumerate(group):
-                    matrix = cm["matrix"]
-                    labels = cm.get("labels", ["Legitimate", "Fraud"])
-                    fig_cm = px.imshow(
-                        matrix,
-                        text_auto=True,
-                        labels=dict(x="Predicted", y="Actual"),
-                        x=labels,
-                        y=labels,
-                        color_continuous_scale="Blues",
-                        title=_model_display_name(model_name),
-                    )
-                    fig_cm.update_layout(height=270, margin=dict(t=40, b=10, l=10, r=10))
-                    cols[col_idx].plotly_chart(fig_cm, use_container_width=True)
-        elif cm_data:
-            st.info("Install plotly for decision outcome grids.")
-        else:
-            st.warning("Decision outcome grid data not yet available.")
+        merged = pd.concat([st.session_state.review_queue, df], ignore_index=True)
+        if "TransactionID" in merged.columns:
+            merged = merged.drop_duplicates(subset=["TransactionID"], keep="last")
+        st.session_state.review_queue = merged
 
 
-# =========================
-# Page 3: Live Transaction Monitor (CSV Upload)
-# =========================
-def page_live_prediction() -> None:
-    st.title("📡 Live Transaction Monitor")
+def save_feedback_csv() -> Path:
+    ensure_session_state()
+    out_path = FEEDBACK_DIR / "manual_review_feedback.csv"
+    st.session_state.review_history.to_csv(out_path, index=False)
+    return out_path
+
+
+# -------------------------
+# Pages
+# -------------------------
+def page_home() -> None:
+    st.title("Fraud Detection Dashboard")
+    st.write("This system helps teams screen transactions, review uncertain cases, and record final decisions.")
+
+    st.subheader("How to use this dashboard")
     st.markdown(
-        "Upload a file of transactions and the AI will screen each one, flagging those that "
-        "look suspicious so your team can take action."
+        """
+        1. Go to **Transaction Screening** and upload a CSV file.
+        2. Review high-risk or uncertain transactions in **Manual Review Queue**.
+        3. Save investigator decisions to improve future model updates.
+        """
     )
 
-    st.info(
-        "📂 **How to use:** Export a batch of recent transactions as a CSV file from your banking "
-        "system and upload it here. The AI will analyse each transaction and highlight the ones "
-        "that match known fraud patterns."
-    )
+    st.subheader("Core workflow")
+    col1, col2, col3 = st.columns(3)
+    col1.info("Screen transactions with risk scores.")
+    col2.info("Prioritize uncertain and high-risk cases.")
+    col3.info("Capture final decisions as feedback.")
+
+    st.subheader("Model summary")
+    st.table(pd.DataFrame({
+        "Engine": ["Pattern Engine (XGBoost)", "Deep Learning Engine (MLP)", "Combined Engine"],
+        "Purpose": [
+            "Detects structured fraud patterns",
+            "Finds complex hidden behavior",
+            "Combines both for final prioritization",
+        ],
+    }))
+
+
+def page_transaction_screening() -> None:
+    st.title("Transaction Screening")
+    st.write("Upload transaction data. The system will score each transaction and suggest what to do next.")
 
     artifacts, art_err = load_artifacts()
     xgb_model, xgb_err = load_xgb_model()
 
     if artifacts is None:
-        st.error(f"AI system not ready: {art_err}")
-        st.info("Ask your technical team to place model artifacts in the `results/` folder.")
+        st.error(f"Model artifacts are not available: {art_err}")
         return
 
-    if xgb_err:
-        st.warning(f"The Pattern Engine is currently unavailable ({xgb_err}). Running in Deep Learning Engine-only mode.")
+    with st.expander("Screening settings", expanded=True):
+        col1, col2, col3 = st.columns(3)
+        top_percent = col1.slider("Flag top risk percent", 1.0, 50.0, 5.0, 0.5)
+        uncertainty_threshold = col2.slider("Uncertainty threshold", 0.005, 0.100, 0.030, 0.001)
+        mc_passes = col3.slider("Confidence passes", 5, 50, 20)
 
-    config = artifacts["config"]
-
-    with st.sidebar:
-        st.header("🎚️ Screening Options")
-        use_mc = st.checkbox(
-            "Enable AI Confidence Scoring",
-            value=False,
-            help="When enabled, the AI runs multiple checks on each transaction to report how confident it is in its decision. Slightly slower.",
-        )
-        T = st.slider(
-            "Confidence check passes",
-            5,
-            50,
-            int(config.get("mc_dropout_T", 20)),
-            help="More passes = more accurate confidence score, but takes longer to run.",
-        )
-        top_percent = st.slider(
-            "Flag top risky transactions (%)",
-            0.0,
-            50.0,
-            float(config.get("flag_top_percent", 5.0)),
-            0.5,
-            help="Flags the highest-risk X% of transactions in the uploaded file for your team to review.",
-        )
-        st.caption(
-            f"At {top_percent:.1f}%, only the most suspicious transactions will be flagged for review."
-        )
-
-    uploaded = st.file_uploader(
-        "Upload transaction file (CSV format)",
-        type=["csv"],
-        key="live_pred_upload",
-        help="The file must contain transaction data exported from your banking system, including columns such as TransactionDT, TransactionAmt, and the V-feature columns.",
-    )
-
+    uploaded = st.file_uploader("Upload CSV file", type=["csv"], key="screen_upload")
     if uploaded is None:
-        st.info("👆 Upload a transaction file above to begin screening.")
+        st.info("Please upload a CSV file to begin.")
         return
 
     try:
         df_raw = pd.read_csv(uploaded)
     except ParserError as pe:
-        st.error("The file could not be read — it appears to be malformed.")
-        st.caption(
-            "Please ensure the file is a valid CSV where every row has the same number of columns "
-            "as the header, and any fields containing commas are enclosed in quotes."
-        )
-        with st.expander("View technical error details"):
-            st.code(str(pe))
+        st.error("The CSV file format appears invalid.")
+        st.code(str(pe))
         return
     except Exception as e:
-        st.error(f"Could not open file: {e}")
+        st.error(f"File could not be read: {e}")
         return
 
-    st.subheader("📋 Transaction File Preview")
-    st.caption("Showing the first 20 rows of your uploaded file.")
-    preview_cols = [
-        c
-        for c in ["TransactionID", "TransactionDT", "TransactionAmt", "ProductCD", "card1", "card4", "DeviceType"]
-        if c in df_raw.columns
-    ]
-    st.dataframe(df_raw[preview_cols].head(20) if preview_cols else df_raw.head(10), use_container_width=True)
+    st.subheader("Data preview")
+    st.dataframe(df_raw.head(20), use_container_width=True)
 
     try:
-        with st.spinner("🔍 Screening transactions — please wait…"):
-            mlp_probs, mlp_var = run_mlp_inference(artifacts, df_raw, use_mc=use_mc, T=T)
+        with st.spinner("Running fraud screening..."):
+            mlp_probs, mlp_var = run_mlp_inference(artifacts, df_raw, use_mc=True, T=mc_passes)
 
-        mlp_flags, mlp_cutoff = flag_top_percent(mlp_probs, top_percent)
-
-        # Optionally run Pattern Engine on the same preprocessed features
-        xgb_probs: np.ndarray | None = None
+        xgb_probs = None
         if xgb_model is not None:
             try:
                 import xgboost as xgb
-
-                with st.spinner("🔍 Running Pattern Engine check…"):
-                    df_feat = preprocess_raw_to_features(
-                        df_raw,
-                        artifacts["te"],
-                        artifacts["pca"],
-                        artifacts["medians"],
-                        artifacts["target_mean"],
-                        artifacts["card_stats"],
-                    )
-                    Xs = align_and_scale(df_feat, artifacts["feature_input_cols"], artifacts["scaler"])
-                    X_df = pd.DataFrame(Xs, columns=artifacts["feature_input_cols"])
-                    xgb_probs = xgb_model.predict(xgb.DMatrix(X_df, feature_names=artifacts["feature_input_cols"]))
-            except Exception as xe:
-                st.warning(f"Pattern Engine check failed: {xe}")
-
-        # Build results table with user-friendly column names
-        out = pd.DataFrame()
-        if "TransactionID" in df_raw.columns:
-            out["Transaction ID"] = df_raw["TransactionID"]
-        if "TransactionAmt" in df_raw.columns:
-            out["Amount ($)"] = df_raw["TransactionAmt"]
-
-        out["Risk Score (Deep Learning)"] = mlp_probs
-        if mlp_var is not None:
-            out["AI Certainty Score"] = mlp_var
-        out["Flagged for Review (Deep Learning)"] = mlp_flags.astype(bool)
-
-        if xgb_probs is not None:
-            xgb_flags, _ = flag_top_percent(xgb_probs, top_percent)
-            out["Risk Score (Pattern Engine)"] = xgb_probs
-            out["Flagged for Review (Pattern Engine)"] = xgb_flags.astype(bool)
-
-            ensemble_probs = 0.6 * xgb_probs + 0.4 * mlp_probs
-            ensemble_flags, _ = flag_top_percent(ensemble_probs, top_percent)
-            out["Risk Score (Combined)"] = ensemble_probs
-            out["⚑ Final Flag"] = ensemble_flags.astype(bool)
-
-            out["Engines Agree"] = mlp_flags == xgb_flags
-
-        # --- Summary dashboard ---
-        st.subheader("📊 Screening Summary")
-
-        if xgb_probs is not None:
-            agree_count = int((mlp_flags == xgb_flags).sum())
-            disagree_count = len(out) - agree_count
-            agree_rate = 100.0 * agree_count / max(len(out), 1)
-            flagged_combined = int(ensemble_flags.sum())
-
-            c1, c2, c3, c4, c5 = st.columns(5)
-            c1.metric(
-                "Total Transactions",
-                len(out),
-                help="Total number of transactions in the uploaded file.",
-            )
-            c2.metric(
-                "Flagged by Deep Learning",
-                int(mlp_flags.sum()),
-                help="Transactions flagged as high-risk by the Deep Learning Engine.",
-            )
-            c3.metric(
-                "Flagged by Pattern Engine",
-                int(xgb_flags.sum()),
-                help="Transactions flagged as high-risk by the Pattern Engine.",
-            )
-            c4.metric(
-                "⚑ Flagged by Combined Decision",
-                flagged_combined,
-                help="Transactions flagged by the Combined Decision Engine — the most reliable verdict.",
-            )
-            c5.metric(
-                "Engines in Agreement",
-                f"{agree_rate:.1f}%",
-                help="Percentage of transactions where both AI engines reached the same decision. High agreement means more reliable results.",
-            )
-
-            if disagree_count > 0:
-                st.warning(
-                    f"⚠️ **{disagree_count} transaction(s) need manual review** — the two AI engines gave different verdicts. "
-                    "These are shown below."
-                )
-                disagree_df = out[~out["Engines Agree"]].copy()
-                st.dataframe(disagree_df.head(30), use_container_width=True)
-        else:
-            c1, c2 = st.columns(2)
-            c1.metric("Total Transactions", len(out))
-            c2.metric(
-                "Flagged for Review",
-                int(mlp_flags.sum()),
-                help=f"Risk threshold used: {mlp_cutoff:.4f}" if np.isfinite(mlp_cutoff) else None,
-            )
-
-        # --- Top risks ---
-        st.subheader("🚨 Highest-Risk Transactions (Top 20)")
-        st.caption(
-            "These transactions have the highest risk scores and should be prioritised for review. "
-            "A score closer to 1.0 means higher suspicion of fraud."
-        )
-        risk_col = "Risk Score (Combined)" if "Risk Score (Combined)" in out.columns else "Risk Score (Deep Learning)"
-        st.dataframe(out.sort_values(risk_col, ascending=False).head(20), use_container_width=True)
-
-        with st.expander("📄 View All Screened Transactions"):
-            st.caption("Showing first 50 rows.")
-            st.dataframe(out.head(50), use_container_width=True)
-
-        st.download_button(
-            "⬇️ Download Full Screening Results (CSV)",
-            data=out.to_csv(index=False).encode("utf-8"),
-            file_name="fraud_screening_results.csv",
-            mime="text/csv",
-        )
-
-    except Exception as e:
-        st.error(f"Screening failed: {e}")
-
-
-# =========================
-# Page 4: Investigate Transaction
-# =========================
-def _decision_label(prob: float) -> tuple[str, str, str]:
-    """Return (decision, emoji, streamlit_alert_type) for a fraud probability."""
-    if prob < 0.20:
-        return "✅ APPROVE", "🟢", "success"
-    if prob < 0.50:
-        return "🔍 MANUAL REVIEW", "🟡", "warning"
-    if prob < 0.75:
-        return "🚫 BLOCK — HIGH RISK", "🔴", "error"
-    return "🚫 BLOCK — CRITICAL RISK", "🔴", "error"
-
-
-def _risk_level(prob: float) -> tuple[str, str]:
-    """Return (display_label, streamlit_alert_type) for a fraud probability."""
-    if prob < 0.20:
-        return "Low Risk", "success"
-    if prob < 0.50:
-        return "Medium Risk — Needs Review", "warning"
-    if prob < 0.75:
-        return "High Risk — Recommend Block", "error"
-    return "Critical Risk — Block Immediately", "error"
-
-
-def page_single_transaction() -> None:
-    st.title("🔎 Investigate Transaction")
-    st.markdown(
-        "Enter the details of a specific transaction to get an instant AI verdict. "
-        "The system will tell you whether to **Approve**, send for **Manual Review**, or **Block** the transaction."
-    )
-
-    st.info(
-        "💡 **Tip:** Fill in as many fields as possible for the most accurate result. "
-        "Fields you are unsure about can be left at their default values."
-    )
-
-    artifacts, art_err = load_artifacts()
-    if artifacts is None:
-        st.error(f"AI system not ready: {art_err}")
-        st.info("Ask your technical team to place model artifacts in the `results/` folder.")
-        return
-
-    with st.form("transaction_form"):
-        st.subheader("Transaction Details")
-        col1, col2, col3 = st.columns(3)
-
-        with col1:
-            amount = st.number_input(
-                "Transaction Amount ($)",
-                min_value=0.01,
-                max_value=50_000.0,
-                value=150.0,
-                step=0.01,
-                help="The dollar value of this transaction.",
-            )
-            product_cd = st.selectbox(
-                "Product Category",
-                ["W", "H", "C", "S", "R"],
-                help="The product or service category code for this transaction.",
-            )
-            card4 = st.selectbox(
-                "Card Network",
-                ["visa", "mastercard", "discover", "american express"],
-                help="The payment network of the card used.",
-            )
-            card6 = st.selectbox(
-                "Card Type",
-                ["debit", "credit"],
-                help="Whether the card is a debit or credit card.",
-            )
-
-        with col2:
-            device_type = st.selectbox(
-                "Device Used",
-                ["desktop", "mobile", "missing"],
-                help="The type of device used to make the transaction.",
-            )
-            p_email = st.text_input(
-                "Buyer Email Domain",
-                value="gmail.com",
-                help="The email domain of the person making the purchase (e.g. gmail.com, yahoo.com).",
-            )
-            r_email = st.text_input(
-                "Recipient Email Domain",
-                value="gmail.com",
-                help="The email domain of the recipient, if applicable.",
-            )
-            device_info = st.text_input(
-                "Device Identifier",
-                value="missing",
-                help="A device fingerprint or identifier string, if available.",
-            )
-
-        with col3:
-            card1 = st.number_input(
-                "Card Number Group (card1)",
-                min_value=0,
-                max_value=20_000,
-                value=10_000,
-                help="An anonymised grouping identifier for the card used.",
-            )
-            card2 = st.number_input(
-                "Card Sub-Group (card2)",
-                min_value=0,
-                max_value=600,
-                value=320,
-                help="A secondary anonymised card grouping identifier.",
-            )
-            transaction_dt = st.number_input(
-                "Transaction Timestamp (seconds from reference)",
-                min_value=0,
-                max_value=15_811_131,
-                value=86_400,
-                help="The transaction time as a number of seconds from the dataset reference date. For example, 86400 = 1 day in.",
-            )
-            mc_T = st.slider(
-                "Confidence check passes",
-                5,
-                50,
-                20,
-                help="More passes = more reliable AI Certainty Score, but takes slightly longer.",
-            )
-
-        submitted = st.form_submit_button("🔍 Analyse Transaction", use_container_width=True)
-
-    if not submitted:
-        return
-
-    # Build a synthetic single-row DataFrame with all required columns
-    try:
-        n_v_cols = 339  # Standard IEEE-CIS V-columns count
-        row: dict = {
-            "TransactionDT": [int(transaction_dt)],
-            "TransactionAmt": [float(amount)],
-            "ProductCD": [product_cd],
-            "card1": [int(card1)],
-            "card2": [int(card2)],
-            "card3": [500],
-            "card4": [card4],
-            "card6": [card6],
-            "DeviceType": [device_type],
-            "P_emaildomain": [p_email],
-            "R_emaildomain": [r_email],
-            "DeviceInfo": [device_info],
-        }
-        for i in range(1, n_v_cols + 1):
-            row[f"V{i}"] = [0.0]
-
-        df_single = pd.DataFrame(row)
-
-        with st.spinner("🔍 Analysing transaction — please wait…"):
-            mlp_probs, mlp_var = run_mlp_inference(artifacts, df_single, use_mc=True, T=mc_T)
-
-        mlp_prob = float(mlp_probs[0])
-        mlp_uncertainty = float(mlp_var[0]) if mlp_var is not None else None
-
-        # ---- PRIMARY VERDICT ----
-        st.markdown("---")
-        decision, decision_emoji, alert_type = _decision_label(mlp_prob)
-        risk_label, _ = _risk_level(mlp_prob)
-
-        st.subheader("AI Verdict")
-        getattr(st, alert_type)(f"## {decision}\n\nRisk Level: **{risk_label}**")
-
-        # Traffic-light colour metric strip
-        risk_pct = int(mlp_prob * 100)
-        col_v1, col_v2, col_v3 = st.columns(3)
-        col_v1.metric(
-            "Risk Score",
-            f"{risk_pct}%",
-            help="A score from 0% (completely safe) to 100% (definitely fraud). Scores above 50% indicate high risk.",
-        )
-        if mlp_uncertainty is not None:
-            # Variance from MC Dropout is typically in the range [0, 0.1]; scale to a 0–100 display range
-            # by subtracting 1000× the variance from 100 (clamped to [0, 100]).
-            _UNCERTAINTY_DISPLAY_SCALE = 1000
-            certainty_pct = max(0.0, 100.0 - mlp_uncertainty * _UNCERTAINTY_DISPLAY_SCALE)
-            conf_label = "High" if mlp_uncertainty < 0.01 else ("Medium" if mlp_uncertainty < 0.05 else "Low")
-            col_v2.metric(
-                "AI Certainty",
-                f"{conf_label}",
-                help="Indicates how confident the AI is in its verdict. High certainty means the decision is reliable. Low certainty means a human review is strongly recommended.",
-            )
-        col_v3.metric(
-            "Amount",
-            f"${amount:,.2f}",
-            help="The transaction amount entered.",
-        )
-
-        st.progress(min(mlp_prob, 1.0), text=f"Risk level: {risk_label}")
-
-        # ---- PATTERN ENGINE (XGBoost) ----
-        xgb_model, xgb_err = load_xgb_model()
-        if xgb_model is not None:
-            try:
-                import xgboost as xgb
-
                 df_feat = preprocess_raw_to_features(
-                    df_single,
+                    df_raw,
                     artifacts["te"],
                     artifacts["pca"],
                     artifacts["medians"],
@@ -1110,295 +494,281 @@ def page_single_transaction() -> None:
                 )
                 Xs = align_and_scale(df_feat, artifacts["feature_input_cols"], artifacts["scaler"])
                 X_df = pd.DataFrame(Xs, columns=artifacts["feature_input_cols"])
-                xgb_prob = float(
-                    xgb_model.predict(xgb.DMatrix(X_df, feature_names=artifacts["feature_input_cols"]))[0]
-                )
-
-                xgb_decision, _, xgb_alert_type = _decision_label(xgb_prob)
-                xgb_risk_label, _ = _risk_level(xgb_prob)
-
-                ensemble_prob = 0.6 * xgb_prob + 0.4 * mlp_prob
-                ens_decision, _, ens_alert_type = _decision_label(ensemble_prob)
-                ens_risk_label, _ = _risk_level(ensemble_prob)
-
-                st.markdown("---")
-                st.subheader("Engine-by-Engine Breakdown")
-                col_dl, col_xgb, col_ens = st.columns(3)
-
-                with col_dl:
-                    st.markdown("**Deep Learning Engine**")
-                    getattr(st, alert_type)(f"{decision}\n\nScore: {mlp_prob:.1%}")
-
-                with col_xgb:
-                    st.markdown("**Pattern Engine**")
-                    getattr(st, xgb_alert_type)(f"{xgb_decision}\n\nScore: {xgb_prob:.1%}")
-
-                with col_ens:
-                    st.markdown("**Combined Decision (Recommended)**")
-                    getattr(st, ens_alert_type)(f"{ens_decision}\n\nScore: {ensemble_prob:.1%}")
-
-                if _decision_label(mlp_prob)[0] != _decision_label(xgb_prob)[0]:
-                    st.warning(
-                        "⚠️ The two AI engines reached **different verdicts** for this transaction. "
-                        "We recommend a **manual review** by a fraud analyst."
-                    )
-
+                xgb_probs = xgb_model.predict(xgb.DMatrix(X_df, feature_names=artifacts["feature_input_cols"]))
             except Exception as xe:
-                st.warning(f"Pattern Engine check could not complete: {xe}")
+                st.warning(f"Pattern engine unavailable for this run: {xe}")
+        elif xgb_err:
+            st.warning(f"Pattern engine not loaded: {xgb_err}")
+
+        if xgb_probs is not None:
+            combined = 0.6 * xgb_probs + 0.4 * mlp_probs
         else:
-            st.info(f"Pattern Engine not available: {xgb_err}")
+            combined = mlp_probs
 
-        # ---- PROGRESSIVE DISCLOSURE ----
-        with st.expander("🔬 Why did the AI make this decision?"):
-            st.markdown(
-                "The AI examined multiple signals in this transaction, including:"
-            )
-            st.markdown(
-                f"""
-                - **Transaction amount** (${amount:,.2f}) compared to typical fraud amounts in training data
-                - **Time of transaction** relative to known fraud time patterns
-                - **Device type** ({device_type}) and email domain patterns
-                - **Card network** ({card4}) and card type ({card6}) historical fraud rates
-                - **Hidden Pattern Indicators** — 339 anonymised behavioural signals compressed into key patterns
-                """
-            )
-            st.info(
-                "A high risk score means the combination of transaction amount, timing, device, "
-                "and card details closely matches known fraud profiles seen in historical data."
-            )
+        cutoff = float(np.quantile(combined, 1 - top_percent / 100.0))
+        flagged = combined >= cutoff
+        uncertain = (mlp_var is not None) & (mlp_var >= uncertainty_threshold)
 
-            if mlp_uncertainty is not None:
-                st.markdown("---")
-                st.markdown("**AI Certainty Details**")
-                std_dev = float(np.sqrt(mlp_uncertainty))
-                conf_label = "High" if mlp_uncertainty < 0.01 else ("Medium" if mlp_uncertainty < 0.05 else "Low")
-                col_u1, col_u2, col_u3 = st.columns(3)
-                col_u1.metric("Certainty Level", conf_label)
-                col_u2.metric("Score Variability", f"±{std_dev:.3f}")
-                col_u3.metric(
-                    "Score Range (95%)",
-                    f"{max(0.0, mlp_prob - 2*std_dev):.1%} – {min(1.0, mlp_prob + 2*std_dev):.1%}",
-                )
-                st.caption(
-                    "The AI ran multiple independent checks on this transaction. "
-                    "'Score Variability' shows how much the individual checks differed — "
-                    "a low variability means all checks agreed, so the verdict is more reliable."
-                )
+        out = pd.DataFrame()
+        out["TransactionID"] = df_raw["TransactionID"] if "TransactionID" in df_raw.columns else np.arange(len(df_raw))
+        out["TransactionAmt"] = df_raw["TransactionAmt"] if "TransactionAmt" in df_raw.columns else np.nan
+        out["risk_score"] = combined
+        out["risk_band"] = [risk_band(v) for v in combined]
+        out["mlp_score"] = mlp_probs
+        out["xgb_score"] = xgb_probs if xgb_probs is not None else np.nan
+        out["uncertainty_variance"] = mlp_var if mlp_var is not None else np.nan
+        out["confidence"] = [confidence_label(v if mlp_var is not None else None) for v in (mlp_var if mlp_var is not None else [None]*len(out))]
+        out["uncertain_case"] = uncertain if isinstance(uncertain, np.ndarray) else False
+        out["flagged_top_risk"] = flagged
+        out["recommended_action"] = [
+            action_recommendation(prob=float(p), uncertain=bool(u))
+            for p, u in zip(out["risk_score"].values, out["uncertain_case"].values)
+        ]
 
-        with st.expander("🛠️ View Raw Technical Data"):
-            st.write(f"**Deep Learning Engine raw probability:** {mlp_prob:.6f}")
-            if mlp_uncertainty is not None:
-                st.write(f"**MC Dropout variance:** {mlp_uncertainty:.8f}")
-                st.write(f"**Standard deviation:** {float(np.sqrt(mlp_uncertainty)):.6f}")
-            st.caption("These are the underlying numeric outputs from the AI models before any thresholding is applied.")
+        review_candidates = out[(out["flagged_top_risk"]) | (out["uncertain_case"])].copy()
+        add_to_review_queue(review_candidates)
+
+        st.subheader("Summary")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Total transactions", len(out))
+        c2.metric("Flagged (top risk)", int(out["flagged_top_risk"].sum()))
+        c3.metric("Uncertain cases", int(out["uncertain_case"].sum()))
+        c4.metric("Manual review queue", len(st.session_state.review_queue))
+
+        st.subheader("Prioritized transactions")
+        st.dataframe(
+            out.sort_values("risk_score", ascending=False).head(50),
+            use_container_width=True,
+        )
+
+        st.download_button(
+            "Download screening results (CSV)",
+            data=out.to_csv(index=False).encode("utf-8"),
+            file_name="screening_results.csv",
+            mime="text/csv",
+        )
 
     except Exception as e:
-        st.error(f"Analysis failed: {e}")
+        st.error(f"Screening failed: {e}")
 
 
-# =========================
-# Page 5: System Adaptation (Drift Analysis)
-# =========================
-def page_drift_analysis() -> None:
-    st.title("🔄 System Adaptation")
-    st.markdown(
-        "Fraudsters constantly change their tactics. This page shows how the AI detects those changes "
-        "and automatically updates itself to stay effective."
-    )
+def page_case_explanations() -> None:
+    st.title("Case Explanations")
+    st.write("Select one transaction to see a simple explanation of why it was flagged.")
 
-    st.info(
-        "📖 **What you're seeing:** The charts below track AI performance over time. "
-        "When a **New Fraud Pattern** is detected (marked by a red dashed line), the system "
-        "triggers an automatic update so it can continue catching fraud even as tactics evolve. "
-        "A temporary dip in performance after a red line is normal — it means new fraud tactics "
-        "briefly challenged the AI before it adapted."
-    )
-
-    drift_data, is_sample = _load_results_json("drift_analysis.json")
-
-    if drift_data is None:
-        st.warning("System adaptation data is not yet available.")
-        st.info(
-            "To generate this data, ask your technical team to:\n"
-            "1. Run the streaming simulation in the analysis notebook.\n"
-            "2. Export the results using `export_metrics.py`.\n"
-            "3. Place `drift_analysis.json` in the `results/` directory."
-        )
+    ensure_session_state()
+    queue = st.session_state.review_queue
+    if queue.empty:
+        st.info("No transactions in the review queue yet. Run Transaction Screening first.")
         return
 
-    if is_sample:
-        st.info(
-            "ℹ️ Showing **illustrative sample data**. "
-            "Ask your technical team to export real adaptation data to see actual system behaviour."
-        )
+    tx_ids = queue["TransactionID"].astype(str).tolist()
+    selected = st.selectbox("Select transaction ID", tx_ids)
+    row = queue[queue["TransactionID"].astype(str) == selected].iloc[0]
 
-    time_windows: dict = drift_data.get("time_windows", {})
-    drift_events: list = drift_data.get("drift_events", [])
+    st.subheader("Decision summary")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Risk score", f"{float(row['risk_score']):.1%}")
+    col2.metric("Risk band", str(row["risk_band"]))
+    col3.metric("Recommended action", str(row["recommended_action"]))
 
-    if not time_windows:
-        st.error("No time-period data found. Please contact your technical team.")
+    st.subheader("Confidence and uncertainty")
+    col4, col5 = st.columns(2)
+    col4.metric("Confidence", str(row.get("confidence", "Not available")))
+    uv = row.get("uncertainty_variance", np.nan)
+    col5.metric("Uncertainty variance", f"{uv:.5f}" if pd.notna(uv) else "Not available")
+
+    st.subheader("Why this transaction was flagged")
+    reasons = explain_transaction(pd.Series({
+        "TransactionAmt": row.get("TransactionAmt", np.nan),
+        "DeviceType": "missing",
+        "card4": "missing",
+        "TransactionDT": 0,
+    }))
+    for r in reasons:
+        st.write(f"- {r}")
+
+    st.caption("These explanations are guidance signals and should support, not replace, human judgment.")
+
+
+def page_manual_review_queue() -> None:
+    st.title("Manual Review Queue")
+    st.write("Review flagged or uncertain transactions and record final investigator decisions.")
+
+    ensure_session_state()
+    queue = st.session_state.review_queue
+    if queue.empty:
+        st.info("Queue is empty. Screen transactions first.")
         return
 
-    # Build long-format DataFrame with friendly names
-    records = []
-    for model_name, windows in time_windows.items():
-        for w in windows:
-            records.append(
-                {
-                    "AI Engine": _model_display_name(model_name),
-                    "Time Period": w["window"],
-                    "Overall Accuracy": float(w["roc_auc"]),
-                    "Fraud Catch Rate": float(w["pr_auc"]),
-                }
-            )
-    df_drift = pd.DataFrame(records)
-
-    # Overall Accuracy over time
-    st.subheader("📈 Overall Accuracy Over Time")
-    st.caption(
-        "Shows how well each AI engine performed during each time period. "
-        "Red dashed lines mark moments when a **New Fraud Pattern** was detected and the system adapted."
+    st.subheader("Pending review items")
+    st.dataframe(
+        queue.sort_values("risk_score", ascending=False),
+        use_container_width=True,
     )
-    if HAS_PLOTLY:
-        fig_roc = go.Figure()
-        for idx, engine_name in enumerate(df_drift["AI Engine"].unique()):
-            mdf = df_drift[df_drift["AI Engine"] == engine_name].sort_values("Time Period")
-            fig_roc.add_trace(
-                go.Scatter(
-                    x=mdf["Time Period"],
-                    y=mdf["Overall Accuracy"],
-                    mode="lines+markers",
-                    name=engine_name,
-                    line=dict(color=_CHART_COLORS[idx % len(_CHART_COLORS)], width=2),
-                )
-            )
-        for event in drift_events:
-            fig_roc.add_vline(
-                x=event["window"],
-                line_dash="dash",
-                line_color="red",
-                annotation_text=f"🚨 New Fraud Pattern @ Period {event['window']}",
-                annotation_position="top right",
-            )
-        fig_roc.update_layout(
-            title="AI Engine Accuracy Over Time — New Fraud Patterns Highlighted",
-            xaxis_title="Time Period",
-            yaxis_title="Overall Accuracy",
-            height=430,
-            yaxis_range=[0.5, 1.0],
+
+    st.subheader("Record a review decision")
+    tx_ids = queue["TransactionID"].astype(str).tolist()
+    selected = st.selectbox("Transaction ID", tx_ids, key="review_tx")
+    selected_row = queue[queue["TransactionID"].astype(str) == selected].iloc[0]
+
+    col1, col2 = st.columns(2)
+    reviewer = col1.text_input("Reviewer name", value="Investigator")
+    decision = col2.selectbox("Decision", ["Confirm Fraud", "Mark Legitimate", "Escalate"])
+
+    notes = st.text_area("Review notes", height=120, placeholder="Add investigation notes")
+
+    if st.button("Save decision", use_container_width=True):
+        record = {
+            "TransactionID": selected_row["TransactionID"],
+            "risk_score": selected_row["risk_score"],
+            "risk_band": selected_row["risk_band"],
+            "recommended_action": selected_row["recommended_action"],
+            "review_decision": decision,
+            "review_notes": notes,
+            "reviewer": reviewer,
+            "timestamp": pd.Timestamp.utcnow().isoformat(),
+        }
+        st.session_state.review_history = pd.concat(
+            [st.session_state.review_history, pd.DataFrame([record])],
+            ignore_index=True,
         )
-        st.plotly_chart(fig_roc, use_container_width=True)
+
+        st.session_state.review_queue = queue[queue["TransactionID"].astype(str) != selected].copy()
+        st.success("Decision saved and transaction removed from queue.")
+
+    st.subheader("Review history")
+    if st.session_state.review_history.empty:
+        st.caption("No review decisions saved yet.")
     else:
-        pivot = df_drift.pivot(index="Time Period", columns="AI Engine", values="Overall Accuracy")
-        st.line_chart(pivot)
+        st.dataframe(st.session_state.review_history.sort_values("timestamp", ascending=False), use_container_width=True)
 
-    # Fraud Catch Rate over time
-    st.subheader("📈 Fraud Catch Rate Over Time")
-    st.caption(
-        "Shows how many actual fraud cases each engine caught in each time period. "
-        "Higher is better. Red lines show when new fraud patterns emerged."
-    )
-    if HAS_PLOTLY:
-        fig_pr = go.Figure()
-        for idx, engine_name in enumerate(df_drift["AI Engine"].unique()):
-            mdf = df_drift[df_drift["AI Engine"] == engine_name].sort_values("Time Period")
-            fig_pr.add_trace(
-                go.Scatter(
-                    x=mdf["Time Period"],
-                    y=mdf["Fraud Catch Rate"],
-                    mode="lines+markers",
-                    name=engine_name,
-                    line=dict(color=_CHART_COLORS[idx % len(_CHART_COLORS)], width=2),
-                )
-            )
-        for event in drift_events:
-            fig_pr.add_vline(x=event["window"], line_dash="dash", line_color="red")
-        fig_pr.update_layout(
-            title="Fraud Catch Rate Over Time — New Fraud Patterns Highlighted",
-            xaxis_title="Time Period",
-            yaxis_title="Fraud Catch Rate",
-            height=400,
+        csv_bytes = st.session_state.review_history.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "Download review feedback (CSV)",
+            data=csv_bytes,
+            file_name="manual_review_feedback.csv",
+            mime="text/csv",
         )
-        st.plotly_chart(fig_pr, use_container_width=True)
-    else:
-        pivot_pr = df_drift.pivot(index="Time Period", columns="AI Engine", values="Fraud Catch Rate")
-        st.line_chart(pivot_pr)
 
-    # Drift / New-Pattern events table
-    if drift_events:
-        st.subheader("🚨 New Fraud Pattern Events Detected")
-        st.caption(
-            "Each row below represents a point in time when the AI detected that fraudsters had "
-            "changed their approach. The system automatically triggered an update at each of these moments."
-        )
-        df_events = pd.DataFrame(drift_events)
-        if "window" in df_events.columns:
-            df_events = df_events.rename(columns={"window": "Time Period"})
-        st.dataframe(df_events, use_container_width=True)
+        if st.button("Save feedback file to project folder"):
+            path = save_feedback_csv()
+            st.success(f"Feedback saved to: {path}")
 
-    st.subheader("💡 Key Takeaways for Your Team")
+
+def page_alerts_and_notifications() -> None:
+    st.title("Alerts and Notifications")
+    st.write("This section provides a simple operational view of alert volumes and recommended communication triggers.")
+
+    ensure_session_state()
+
+    queue_count = len(st.session_state.review_queue)
+    history = st.session_state.review_history.copy()
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Current queue size", queue_count)
+
+    confirmed_fraud = int((history["review_decision"] == "Confirm Fraud").sum()) if not history.empty else 0
+    escalated = int((history["review_decision"] == "Escalate").sum()) if not history.empty else 0
+    c2.metric("Confirmed fraud cases", confirmed_fraud)
+    c3.metric("Escalated cases", escalated)
+
+    st.subheader("Notification guidance")
     st.markdown(
         """
-        - 🔴 **Red dashed lines = New Fraud Pattern Detected** — the AI noticed fraudsters changed their tactics and automatically started retraining.
-        - 📉 **A dip after a red line** is expected — it takes a short time for the AI to fully adapt to the new pattern.
-        - 🔄 **The Pattern Engine (XGBoost)** recovers fastest after new patterns emerge, thanks to its built-in auto-update capability.
-        - 🧠 **The Deep Learning Engine** maintains more stable performance overall, but may adapt more slowly.
-        - ✅ **Stable lines** mean no new fraud tactics were detected — the AI is performing as expected.
+        - Send administrator alert when a case is marked **Confirm Fraud**.
+        - Send high-priority analyst alert when a case is **Escalate**.
+        - Optionally notify customer support for customer communication workflows.
         """
     )
 
-    with st.expander("🔬 View Technical Details"):
-        st.markdown(
-            """
-            **Technical explanation:**
-            - Performance is tracked across rolling time windows using `TransactionDT` as the time axis.
-            - **New Fraud Pattern Detection** is performed using the **ADWIN (ADaptive WINdowing)** algorithm,
-              which detects statistically significant shifts in the distribution of model error over time.
-            - When ADWIN fires, the XGBoost model triggers an incremental retraining step using a replay buffer
-              of recently confirmed fraud labels.
-            - The MLP (Deep Learning Engine) uses early stopping and learning rate scheduling for stability.
-            """
-        )
+    if not history.empty:
+        st.subheader("Recent confirmed/escalated outcomes")
+        alert_df = history[history["review_decision"].isin(["Confirm Fraud", "Escalate"])].copy()
+        st.dataframe(alert_df.sort_values("timestamp", ascending=False).head(50), use_container_width=True)
 
 
-# =========================
-# Main — page navigation
-# =========================
+def page_system_health() -> None:
+    st.title("System Health")
+    st.write("This page shows model performance summaries for monitoring.")
+
+    metrics_path = ART_DIR / "metrics_comparison.json"
+    if not metrics_path.exists():
+        st.info("No metrics file found in results folder.")
+        return
+
+    try:
+        with open(metrics_path) as f:
+            data = json.load(f)
+        models = data.get("models", {})
+        if not models:
+            st.info("Metrics file exists but has no model entries.")
+            return
+
+        rows = []
+        for model_name, m in models.items():
+            rows.append({
+                "Model": model_name,
+                "ROC-AUC": float(m.get("roc_auc", 0)),
+                "PR-AUC": float(m.get("pr_auc", 0)),
+                "Precision": float(m.get("precision", 0)),
+                "Recall": float(m.get("recall", 0)),
+                "F1": float(m.get("f1_score", 0)),
+            })
+        df = pd.DataFrame(rows).sort_values("ROC-AUC", ascending=False)
+
+        st.dataframe(df, use_container_width=True)
+
+        if HAS_PLOTLY:
+            fig = px.bar(df, x="Model", y=["ROC-AUC", "PR-AUC"], barmode="group", title="Model performance")
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.bar_chart(df.set_index("Model")[["ROC-AUC", "PR-AUC"]])
+    except Exception as e:
+        st.error(f"Could not load metrics: {e}")
+
+
+# -------------------------
+# App shell
+# -------------------------
 st.set_page_config(
     page_title="Fraud Detection Dashboard",
-    page_icon="🏦",
+    page_icon=None,
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
+ensure_session_state()
+
 with st.sidebar:
-    st.title("🏦 Fraud Detection")
-    st.caption("AI-Powered Transaction Monitoring")
+    st.title("Fraud Detection")
+    st.caption("Simple workflow for non-technical users")
     st.divider()
 
     page = st.radio(
-        "Navigate to:",
+        "Navigation",
         [
             "Home",
+            "Transaction Screening",
+            "Case Explanations",
+            "Manual Review Queue",
+            "Alerts and Notifications",
             "System Health",
-            "Live Transaction Monitor",
-            "Investigate Transaction",
-            "System Adaptation",
         ],
-        label_visibility="collapsed",
     )
 
     st.divider()
-    st.caption("Need help? Contact your IT support team.")
-    st.caption(f"Data location: `{ART_DIR}`")
+    st.caption(f"Artifacts folder: {ART_DIR}")
 
 if page == "Home":
-    page_overview()
+    page_home()
+elif page == "Transaction Screening":
+    page_transaction_screening()
+elif page == "Case Explanations":
+    page_case_explanations()
+elif page == "Manual Review Queue":
+    page_manual_review_queue()
+elif page == "Alerts and Notifications":
+    page_alerts_and_notifications()
 elif page == "System Health":
-    page_model_performance()
-elif page == "Live Transaction Monitor":
-    page_live_prediction()
-elif page == "Investigate Transaction":
-    page_single_transaction()
-elif page == "System Adaptation":
-    page_drift_analysis()
+    page_system_health()
