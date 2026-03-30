@@ -322,7 +322,28 @@ def run_mlp_inference(
 # -------------------------
 # UI helpers
 # -------------------------
+
+def fmt_pct(score: float, decimals: int = 1) -> str:
+    """Format a [0, 1] probability/metric score as a percentage string for display.
+
+    Internal model calculations remain in [0, 1]; this helper is used only for
+    user-facing outputs (tables, metrics widgets, printed summaries, etc.).
+
+    Examples:
+        fmt_pct(0.82)      -> "82.0%"
+        fmt_pct(0.5)       -> "50.0%"   (threshold 0.5 == 50%)
+        fmt_pct(0.034, 2)  -> "3.40%"
+    """
+    return f"{score * 100:.{decimals}f}%"
+
+
 def risk_band(prob: float) -> str:
+    """Classify a [0, 1] fraud probability into a risk band label.
+
+    Thresholds are kept in [0, 1] for internal comparisons; displayed
+    equivalents are 20% / 50% / 75%.
+    """
+    # Internal thresholds: 0.20 (20%), 0.50 (50%), 0.75 (75%)
     if prob < 0.20:
         return "Low"
     if prob < 0.50:
@@ -333,6 +354,12 @@ def risk_band(prob: float) -> str:
 
 
 def action_recommendation(prob: float, uncertain: bool) -> str:
+    """Return a recommended action for a transaction.
+
+    prob is a [0, 1] fraud probability (internal scale).
+    Displayed thresholds: 20% approve, 50% manual review, above 50% block.
+    """
+    # Internal thresholds: 0.20 (20%), 0.50 (50%)
     if uncertain:
         return "Send for manual review"
     if prob < 0.20:
@@ -343,6 +370,10 @@ def action_recommendation(prob: float, uncertain: bool) -> str:
 
 
 def confidence_label(var_value: float | None) -> str:
+    """Convert MC-Dropout variance to a human-readable confidence label.
+
+    Variance thresholds are kept in their native scale (not converted to %).
+    """
     if var_value is None:
         return "Not available"
     if var_value < 0.010:
@@ -536,14 +567,26 @@ def page_transaction_screening() -> None:
         c4.metric("Manual review queue", len(st.session_state.review_queue))
 
         st.subheader("Prioritized transactions")
-        st.dataframe(
-            out.sort_values("risk_score", ascending=False).head(50),
-            use_container_width=True,
+        # Build a display copy with percentage-formatted score columns (internal out uses [0,1])
+        display_out = out.sort_values("risk_score", ascending=False).head(50).copy()
+        display_out["risk_score"] = display_out["risk_score"].apply(fmt_pct)
+        display_out["mlp_score"] = display_out["mlp_score"].apply(fmt_pct)
+        display_out["xgb_score"] = display_out["xgb_score"].apply(
+            lambda x: fmt_pct(x) if pd.notna(x) else "N/A"
+        )
+        st.dataframe(display_out, use_container_width=True)
+
+        # CSV export — scores in percent for readability
+        export_out = out.copy()
+        export_out["risk_score"] = export_out["risk_score"].apply(fmt_pct)
+        export_out["mlp_score"] = export_out["mlp_score"].apply(fmt_pct)
+        export_out["xgb_score"] = export_out["xgb_score"].apply(
+            lambda x: fmt_pct(x) if pd.notna(x) else "N/A"
         )
 
         st.download_button(
             "Download screening results (CSV)",
-            data=out.to_csv(index=False).encode("utf-8"),
+            data=export_out.to_csv(index=False).encode("utf-8"),
             file_name="screening_results.csv",
             mime="text/csv",
         )
@@ -568,7 +611,7 @@ def page_case_explanations() -> None:
 
     st.subheader("Decision summary")
     col1, col2, col3 = st.columns(3)
-    col1.metric("Risk score", f"{float(row['risk_score']):.1%}")
+    col1.metric("Risk score", fmt_pct(float(row['risk_score'])))
     col2.metric("Risk band", str(row["risk_band"]))
     col3.metric("Recommended action", str(row["recommended_action"]))
 
@@ -707,23 +750,29 @@ def page_system_health() -> None:
 
         rows = []
         for model_name, m in models.items():
+            # Internal metrics are stored in [0, 1]; convert to % for display
             rows.append({
                 "Model": model_name,
-                "ROC-AUC": float(m.get("roc_auc", 0)),
-                "PR-AUC": float(m.get("pr_auc", 0)),
-                "Precision": float(m.get("precision", 0)),
-                "Recall": float(m.get("recall", 0)),
-                "F1": float(m.get("f1_score", 0)),
+                "ROC-AUC (%)": round(float(m.get("roc_auc", 0)) * 100, 2),
+                "PR-AUC (%)": round(float(m.get("pr_auc", 0)) * 100, 2),
+                "Precision (%)": round(float(m.get("precision", 0)) * 100, 2),
+                "Recall (%)": round(float(m.get("recall", 0)) * 100, 2),
+                "F1 (%)": round(float(m.get("f1_score", 0)) * 100, 2),
             })
-        df = pd.DataFrame(rows).sort_values("ROC-AUC", ascending=False)
+        df = pd.DataFrame(rows).sort_values("ROC-AUC (%)", ascending=False)
 
         st.dataframe(df, use_container_width=True)
 
         if HAS_PLOTLY:
-            fig = px.bar(df, x="Model", y=["ROC-AUC", "PR-AUC"], barmode="group", title="Model performance")
+            fig = px.bar(
+                df, x="Model", y=["ROC-AUC (%)", "PR-AUC (%)"],
+                barmode="group", title="Model performance (%)",
+                labels={"value": "Score (%)", "variable": "Metric"},
+            )
+            fig.update_yaxes(ticksuffix="%")
             st.plotly_chart(fig, use_container_width=True)
         else:
-            st.bar_chart(df.set_index("Model")[["ROC-AUC", "PR-AUC"]])
+            st.bar_chart(df.set_index("Model")[["ROC-AUC (%)", "PR-AUC (%)"]])
     except Exception as e:
         st.error(f"Could not load metrics: {e}")
 

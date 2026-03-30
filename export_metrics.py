@@ -90,6 +90,19 @@ def _recall_at_fpr(fpr_arr, tpr_arr, target_fpr=0.05):
     return float(tpr0 + alpha * (tpr1 - tpr0))
 
 
+def _fmt_pct(value: float, decimals: int = 2) -> str:
+    """Format a [0, 1] metric value as a percentage string for display.
+
+    Internal metrics are stored in [0, 1]; this helper is used only for
+    printed/logged summaries that a human reads.
+
+    Examples:
+        _fmt_pct(0.8602) -> "86.02%"
+        _fmt_pct(0.5)    -> "50.00%"  (threshold 0.5 == 50%)
+    """
+    return f"{value * 100:.{decimals}f}%"
+
+
 # ---------------------------------------------------------------------------
 # Collect models — edit keys / values to match your notebook variables
 # ---------------------------------------------------------------------------
@@ -152,7 +165,7 @@ for model_name, clf in MODELS.items():
     cm = confusion_matrix(y_test, preds).tolist()  # type: ignore[name-defined]  # noqa: F821
     cm_out[model_name] = {"matrix": cm, "labels": ["Legitimate", "Fraud"]}
 
-    print(f"ROC-AUC={roc_auc:.4f}  PR-AUC={pr_auc:.4f}")
+    print(f"ROC-AUC={_fmt_pct(roc_auc)}  PR-AUC={_fmt_pct(pr_auc)}")
 
 # --- Add Ensemble ---
 print("  Ensemble …", end=" ")
@@ -193,7 +206,7 @@ pr_out["Ensemble"] = {
 ens_cm = confusion_matrix(y_test, ens_preds).tolist()  # type: ignore[name-defined]  # noqa: F821
 cm_out["Ensemble"] = {"matrix": ens_cm, "labels": ["Legitimate", "Fraud"]}
 
-print(f"ROC-AUC={ens_roc_auc:.4f}  PR-AUC={ens_pr_auc:.4f}")
+print(f"ROC-AUC={_fmt_pct(ens_roc_auc)}  PR-AUC={_fmt_pct(ens_pr_auc)}")
 
 # ---------------------------------------------------------------------------
 # Write JSON files

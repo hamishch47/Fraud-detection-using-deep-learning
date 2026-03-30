@@ -12,7 +12,7 @@ This project implements an advanced fraud detection system combining XGBoost and
 - **Ensemble Methods**: Combined XGBoost + MLP predictions
 - **Comprehensive Evaluation**: Detailed model comparison and analysis
 
-📊 **Expected Performance**: ROC-AUC >0.85 | PR-AUC >0.25 | Recall@5%FPR >0.45
+📊 **Expected Performance**: ROC-AUC >85% | PR-AUC >25% | Recall@5%FPR >45%
 
 📖 **See [IMPROVEMENTS.md](IMPROVEMENTS.md) and [IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md) for detailed documentation.**
 
@@ -142,13 +142,13 @@ This repository supports a 6–8 page research paper structure:
 ## 🎯 Model Performance
 
 ### Baseline (Before Improvements)
-- XGBoost: ROC-AUC: 0.7781, PR-AUC: 0.1790
-- MLP Static: ROC-AUC: 0.7555, PR-AUC: 0.1321
+- XGBoost: ROC-AUC: 77.81%, PR-AUC: 17.90%
+- MLP Static: ROC-AUC: 75.55%, PR-AUC: 13.21%
 
 ### Expected (After Improvements)
-- **ROC-AUC**: >0.85 (+0.07 to +0.15 improvement)
-- **PR-AUC**: >0.25 (+0.06 to +0.12 improvement)
-- **Recall@5%FPR**: >0.45 (+0.09 to +0.15 improvement)
+- **ROC-AUC**: >85% (+7% to +15% improvement)
+- **PR-AUC**: >25% (+6% to +12% improvement)
+- **Recall@5%FPR**: >45% (+9% to +15% improvement)
 
 ### Key Improvements
 - 27x more features (13 → 350+)
