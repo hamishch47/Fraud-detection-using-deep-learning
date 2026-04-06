@@ -25,13 +25,14 @@ _HIGH_RISK_THRESHOLD = 75.0  # risk_score >= this → Pending Review
 
 # Candidate paths are tried in order:
 #   1. MODEL_PATH env var (if set)
-#   2. ./stacked_hybrid.pkl
-#   3. ./results/stacked_hybrid.pkl
+#   2. <app.py dir>/stacked_hybrid.pkl
+#   3. <app.py dir>/results/stacked_hybrid.pkl
+_APP_DIR = Path(__file__).resolve().parent
 _MODEL_CANDIDATES: list[Path] = (
     [Path(os.environ["MODEL_PATH"])] if os.environ.get("MODEL_PATH", "").strip() else []
 ) + [
-    Path("stacked_hybrid.pkl"),
-    Path("results/stacked_hybrid.pkl"),
+    _APP_DIR / "stacked_hybrid.pkl",
+    _APP_DIR / "results" / "stacked_hybrid.pkl",
 ]
 
 _model: Any = None
