@@ -399,3 +399,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+st.caption(f"App dir: `{_APP_DIR}`")
+st.caption(f"Has results/stacked_hybrid.pkl? `{(_APP_DIR / 'results' / 'stacked_hybrid.pkl').exists()}`")
+st.caption(f"Results dir listing: `{[p.name for p in (_APP_DIR / 'results').glob('*')][:10]}`")
