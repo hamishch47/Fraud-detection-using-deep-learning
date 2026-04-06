@@ -27,26 +27,32 @@ _HIGH_RISK_THRESHOLD = 75.0  # risk_score >= this → Pending Review
 #   1. MODEL_PATH env var (if set)
 #   2. <app.py dir>/stacked_hybrid.pkl
 #   3. <app.py dir>/results/stacked_hybrid.pkl
+#   4. <app.py dir>/results/stacked_hybrid_model_only.pkl
 _APP_DIR = Path(__file__).resolve().parent
 _MODEL_CANDIDATES: list[Path] = (
     [Path(os.environ["MODEL_PATH"])] if os.environ.get("MODEL_PATH", "").strip() else []
 ) + [
     _APP_DIR / "stacked_hybrid.pkl",
     _APP_DIR / "results" / "stacked_hybrid.pkl",
+    _APP_DIR / "results" / "stacked_hybrid_model_only.pkl",
 ]
 
 _model: Any = None
 _model_loaded_from: str | None = None
+_load_errors: list[tuple[str, str]] = []  # (path, error_message) per failed candidate
 
 
 def _load_model() -> tuple[Any, str | None]:
     """Try each candidate path in order; return (model, path_str) or (None, None)."""
+    global _load_errors
+    _load_errors = []
     for candidate in _MODEL_CANDIDATES:
         if candidate.exists():
             try:
                 loaded = joblib.load(candidate)
                 return loaded, str(candidate)
-            except Exception:
+            except Exception as exc:
+                _load_errors.append((str(candidate), f"{type(exc).__name__}: {exc}"))
                 continue
     return None, None
 
@@ -117,12 +123,18 @@ def _score_with_model(payload: dict, model: Any) -> tuple[float, list[str]]:
     return prob, reasons
 
 
+_last_inference_error: str | None = None
+
+
 def score_transaction(payload: dict) -> dict:
     """Score a transaction locally and return risk_score, decision, reason_codes."""
+    global _last_inference_error
+    _last_inference_error = None
     if _model is not None:
         try:
             prob, reasons = _score_with_model(payload, _model)
-        except Exception:
+        except Exception as exc:
+            _last_inference_error = f"{type(exc).__name__}: {exc}"
             prob, reasons = _fallback_score(payload)
     else:
         prob, reasons = _fallback_score(payload)
@@ -357,6 +369,9 @@ def render_add_transaction_form() -> None:
                 f"Risk Score: **{score_resp['risk_score']}**, "
                 f"Decision: **{score_resp['decision']}**"
             )
+            if _last_inference_error:
+                with st.expander("⚠️ Inference diagnostics (model predict failed, rule-based used)", expanded=False):
+                    st.code(_last_inference_error, language=None)
             st.rerun()
 
 
@@ -378,6 +393,10 @@ def main() -> None:
         st.caption(f"Model loaded from: `{_model_loaded_from}`")
     else:
         st.caption("No model artifact found — using rule-based fallback scorer.")
+        if _load_errors:
+            with st.expander("⚠️ Model load diagnostics", expanded=False):
+                for path, err in _load_errors:
+                    st.code(f"{path}\n  → {err}", language=None)
 
     _init_session_state()
 
@@ -399,7 +418,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-st.caption(f"App dir: `{_APP_DIR}`")
-st.caption(f"Has results/stacked_hybrid.pkl? `{(_APP_DIR / 'results' / 'stacked_hybrid.pkl').exists()}`")
-st.caption(f"Results dir listing: `{[p.name for p in (_APP_DIR / 'results').glob('*')][:10]}`")
