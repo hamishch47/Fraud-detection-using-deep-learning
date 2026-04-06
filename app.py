@@ -17,27 +17,40 @@ import streamlit as st
 # Configuration
 # ---------------------------------------------------------------------------
 
-_MODEL_PATH = Path(os.getenv("MODEL_PATH", "stacked_hybrid.pkl"))
 _HIGH_RISK_THRESHOLD = 75.0  # risk_score >= this → Pending Review
 
 # ---------------------------------------------------------------------------
 # Model loading
 # ---------------------------------------------------------------------------
 
+# Candidate paths are tried in order:
+#   1. MODEL_PATH env var (if set)
+#   2. ./stacked_hybrid.pkl
+#   3. ./results/stacked_hybrid.pkl
+_MODEL_CANDIDATES: list[Path] = (
+    [Path(os.environ["MODEL_PATH"])] if os.environ.get("MODEL_PATH", "").strip() else []
+) + [
+    Path("stacked_hybrid.pkl"),
+    Path("results/stacked_hybrid.pkl"),
+]
+
 _model: Any = None
+_model_loaded_from: str | None = None
 
 
-def _load_model() -> Any:
-    """Try to load a saved model artifact; return None if unavailable."""
-    if _MODEL_PATH.exists():
-        try:
-            return joblib.load(_MODEL_PATH)
-        except Exception:
-            return None
-    return None
+def _load_model() -> tuple[Any, str | None]:
+    """Try each candidate path in order; return (model, path_str) or (None, None)."""
+    for candidate in _MODEL_CANDIDATES:
+        if candidate.exists():
+            try:
+                loaded = joblib.load(candidate)
+                return loaded, str(candidate)
+            except Exception:
+                continue
+    return None, None
 
 
-_model = _load_model()
+_model, _model_loaded_from = _load_model()
 
 # ---------------------------------------------------------------------------
 # Local scoring
@@ -360,6 +373,10 @@ def main() -> None:
     )
 
     st.title("🛡️ Credit Card Fraud Detection — Live Analyst Dashboard")
+    if _model_loaded_from:
+        st.caption(f"Model loaded from: `{_model_loaded_from}`")
+    else:
+        st.caption("No model artifact found — using rule-based fallback scorer.")
 
     _init_session_state()
 
