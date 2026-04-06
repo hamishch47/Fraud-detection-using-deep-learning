@@ -5,163 +5,197 @@ from __future__ import annotations
 import os
 import uuid
 from datetime import datetime
+from pathlib import Path
+from typing import Any
 
+import joblib
+import numpy as np
 import pandas as pd
-import requests
 import streamlit as st
-from sqlalchemy import create_engine, text
-from sqlalchemy.exc import SQLAlchemyError
-from streamlit_autorefresh import st_autorefresh
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
-_DB_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql+psycopg2://postgres:postgres@localhost:5432/fraud",
-)
-_SCORER_URL = os.getenv("SCORER_URL", "http://localhost:8000/score")
-_AUTOREFRESH_INTERVAL_MS = 5_000  # 5 seconds
+_MODEL_PATH = Path(os.getenv("MODEL_PATH", "stacked_hybrid.pkl"))
+_HIGH_RISK_THRESHOLD = 75.0  # risk_score >= this → Pending Review
 
 # ---------------------------------------------------------------------------
-# Database helpers
+# Model loading
 # ---------------------------------------------------------------------------
 
-_engine: object | None = None
+_model: Any = None
 
 
-def _get_engine():
-    """Return a cached SQLAlchemy engine, or None if unavailable."""
-    global _engine  # noqa: PLW0603
-    if _engine is None:
+def _load_model() -> Any:
+    """Try to load a saved model artifact; return None if unavailable."""
+    if _MODEL_PATH.exists():
         try:
-            _engine = create_engine(_DB_URL, pool_pre_ping=True)
+            return joblib.load(_MODEL_PATH)
         except Exception:
-            _engine = None
-    return _engine
+            return None
+    return None
 
 
-def fetch_recent_transactions(limit: int = 200) -> pd.DataFrame:
-    """Fetch the most recent transactions from the DB.
+_model = _load_model()
 
-    Falls back to an empty DataFrame (preserving expected columns) when the
-    database is unavailable.
-    """
-    engine = _get_engine()
-    if engine is None:
-        return _empty_transactions_df()
-    try:
-        query = text(
-            """
-            SELECT id        AS "ID",
-                   amount    AS "Amount",
-                   merchant  AS "Merchant",
-                   location  AS "Location",
-                   risk_score AS "Risk Score",
-                   status    AS "Status",
-                   context   AS "Context",
-                   created_at AS "Created At"
-            FROM transactions
-            ORDER BY created_at DESC
-            LIMIT :limit
-            """
-        )
-        with engine.connect() as conn:
-            df = pd.read_sql(query, conn, params={"limit": limit})
-        return df
-    except SQLAlchemyError:
-        return _empty_transactions_df()
+# ---------------------------------------------------------------------------
+# Local scoring
+# ---------------------------------------------------------------------------
 
 
-def _empty_transactions_df() -> pd.DataFrame:
-    """Return an empty DataFrame with the expected schema columns."""
-    return pd.DataFrame(
-        columns=["ID", "Amount", "Merchant", "Location", "Risk Score", "Status", "Context", "Created At"]
-    )
+def _fallback_score(payload: dict) -> tuple[float, list[str]]:
+    """Deterministic rule-based fallback scorer (no model required)."""
+    amount = float(payload.get("amount", 0))
+    velocity_1h = int(payload.get("velocity_1h", 0))
+    geo_distance_km = float(payload.get("geo_distance_km", 0.0))
+    device_new = int(payload.get("device_new", 0))
+
+    prob = 0.05
+    reasons: list[str] = []
+
+    if amount > 50_000:
+        prob += 0.40
+        reasons.append("Very high transaction amount")
+    elif amount > 10_000:
+        prob += 0.20
+        reasons.append("High transaction amount")
+    elif amount > 5_000:
+        prob += 0.10
+        reasons.append("Elevated transaction amount")
+
+    if velocity_1h >= 5:
+        prob += 0.30
+        reasons.append("High velocity (≥5 txns/h)")
+    elif velocity_1h >= 3:
+        prob += 0.15
+        reasons.append("Elevated velocity (≥3 txns/h)")
+
+    if geo_distance_km > 500:
+        prob += 0.25
+        reasons.append("Transaction far from home location")
+    elif geo_distance_km > 100:
+        prob += 0.10
+        reasons.append("Transaction away from usual area")
+
+    if device_new:
+        prob += 0.15
+        reasons.append("New/unrecognised device")
+
+    prob = min(prob, 0.99)
+    if not reasons:
+        reasons = ["No significant risk flags"]
+
+    return prob, reasons
 
 
-def update_transaction_status(
-    txn_id: str,
-    new_status: str,
-    analyst: str = "analyst-ui",
-) -> bool:
-    """Update transaction status and record the analyst action.
+def _score_with_model(payload: dict, model: Any) -> tuple[float, list[str]]:
+    """Run inference using the loaded model artifact."""
+    features = [
+        float(payload.get("amount", 0)),
+        int(payload.get("velocity_1h", 0)),
+        float(payload.get("geo_distance_km", 0.0)),
+        int(payload.get("device_new", 0)),
+    ]
+    X = np.array(features, dtype=float).reshape(1, -1)
+    prob = float(model.predict_proba(X)[0, 1])
+    reasons = [f"Model score: {prob * 100:.1f}"]
+    return prob, reasons
 
-    Returns True on success, False on failure.
-    """
-    engine = _get_engine()
-    if engine is None:
+
+def score_transaction(payload: dict) -> dict:
+    """Score a transaction locally and return risk_score, decision, reason_codes."""
+    if _model is not None:
+        try:
+            prob, reasons = _score_with_model(payload, _model)
+        except Exception:
+            prob, reasons = _fallback_score(payload)
+    else:
+        prob, reasons = _fallback_score(payload)
+
+    risk_score = round(prob * 100, 2)
+    decision = "Pending Review" if risk_score >= _HIGH_RISK_THRESHOLD else "Auto-Approved"
+    return {
+        "transaction_id": payload.get("id", ""),
+        "risk_score": risk_score,
+        "decision": decision,
+        "reason_codes": reasons,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Session-state data helpers
+# ---------------------------------------------------------------------------
+
+_SEED_TRANSACTIONS = [
+    {
+        "ID": "TXN-SEED-001",
+        "Amount": 48500.0,
+        "Merchant": "ElectroMart",
+        "Location": "Delhi, DL",
+        "Risk Score": 88.0,
+        "Status": "Pending Review",
+        "Context": "Very high transaction amount; High velocity (≥5 txns/h)",
+        "Created At": datetime(2024, 1, 15, 10, 23),
+    },
+    {
+        "ID": "TXN-SEED-002",
+        "Amount": 1200.0,
+        "Merchant": "Swiggy",
+        "Location": "Bengaluru, KA",
+        "Risk Score": 12.0,
+        "Status": "Auto-Approved",
+        "Context": "No significant risk flags",
+        "Created At": datetime(2024, 1, 15, 10, 25),
+    },
+    {
+        "ID": "TXN-SEED-003",
+        "Amount": 15000.0,
+        "Merchant": "JewelHouse",
+        "Location": "Mumbai, MH",
+        "Risk Score": 79.0,
+        "Status": "Pending Review",
+        "Context": "High transaction amount; New/unrecognised device",
+        "Created At": datetime(2024, 1, 15, 10, 31),
+    },
+]
+
+
+def _init_session_state() -> None:
+    """Initialise session-state keys on first run."""
+    if "transactions_df" not in st.session_state:
+        st.session_state.transactions_df = pd.DataFrame(_SEED_TRANSACTIONS)
+    if "selected_index" not in st.session_state:
+        st.session_state.selected_index = None
+
+
+def update_transaction_status(txn_id: str, new_status: str) -> bool:
+    """Update a transaction's status in session state. Returns True on success."""
+    df: pd.DataFrame = st.session_state.transactions_df
+    mask = df["ID"] == txn_id
+    if not mask.any():
         return False
-    try:
-        with engine.begin() as conn:
-            conn.execute(
-                text(
-                    "UPDATE transactions SET status = :s, reviewed_at = NOW() WHERE id = :id"
-                ),
-                {"s": new_status, "id": txn_id},
-            )
-            conn.execute(
-                text(
-                    """
-                    INSERT INTO analyst_actions (txn_id, action, actor, action_time)
-                    VALUES (:id, :a, :actor, NOW())
-                    """
-                ),
-                {"id": txn_id, "a": new_status, "actor": analyst},
-            )
-        return True
-    except SQLAlchemyError:
-        return False
+    st.session_state.transactions_df.loc[mask, "Status"] = new_status
+    return True
 
 
 def insert_transaction(txn: dict, score_resp: dict) -> bool:
-    """Insert a newly scored transaction into the DB.
-
-    Returns True on success, False on failure.
-    """
-    engine = _get_engine()
-    if engine is None:
-        return False
-    try:
-        with engine.begin() as conn:
-            conn.execute(
-                text(
-                    """
-                    INSERT INTO transactions
-                        (id, amount, merchant, location, risk_score, status, context, created_at)
-                    VALUES
-                        (:id, :amount, :merchant, :location, :risk_score, :status, :context, NOW())
-                    """
-                ),
-                {
-                    "id": txn["id"],
-                    "amount": float(txn["amount"]),
-                    "merchant": txn["merchant"],
-                    "location": txn["location"],
-                    "risk_score": float(score_resp["risk_score"]),
-                    "status": score_resp["decision"],
-                    "context": ", ".join(score_resp.get("reason_codes", [])) or "No flags",
-                },
-            )
-        return True
-    except SQLAlchemyError:
-        return False
-
-
-# ---------------------------------------------------------------------------
-# Scoring service helper
-# ---------------------------------------------------------------------------
-
-
-def call_scorer(payload: dict) -> dict | None:
-    """POST payload to scoring service and return response dict, or None on error."""
-    try:
-        resp = requests.post(_SCORER_URL, json=payload, timeout=10)
-        resp.raise_for_status()
-        return resp.json()
-    except Exception:
-        return None
+    """Append a newly scored transaction to the session-state DataFrame."""
+    new_row = {
+        "ID": txn["id"],
+        "Amount": float(txn["amount"]),
+        "Merchant": txn["merchant"],
+        "Location": txn["location"],
+        "Risk Score": float(score_resp["risk_score"]),
+        "Status": score_resp["decision"],
+        "Context": ", ".join(score_resp.get("reason_codes", [])) or "No flags",
+        "Created At": datetime.now(),
+    }
+    new_df = pd.DataFrame([new_row])
+    st.session_state.transactions_df = pd.concat(
+        [new_df, st.session_state.transactions_df], ignore_index=True
+    )
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -194,7 +228,7 @@ def render_alert_queue(df: pd.DataFrame) -> int | None:
     st.subheader("The Analyst Alert Queue")
 
     if df.empty:
-        st.info("No transactions found. Use the form below to add dummy transactions, or check DB connectivity.")
+        st.info("No transactions found. Use the form below to add transactions.")
         return None
 
     display_cols = ["ID", "Amount", "Merchant", "Location", "Risk Score", "Status", "Context"]
@@ -258,7 +292,7 @@ def render_investigation_panel(selected_index: int, df: pd.DataFrame) -> None:
             if update_transaction_status(txn_id, "Fraud"):
                 st.success(f"{txn_id} marked as Fraud.")
             else:
-                st.error("Failed to update status in DB. Please check DB connectivity.")
+                st.error("Failed to update status.")
             st.session_state.selected_index = None
             st.rerun()
 
@@ -266,7 +300,7 @@ def render_investigation_panel(selected_index: int, df: pd.DataFrame) -> None:
             if update_transaction_status(txn_id, "Approved"):
                 st.success(f"{txn_id} marked as Approved.")
             else:
-                st.error("Failed to update status in DB. Please check DB connectivity.")
+                st.error("Failed to update status.")
             st.session_state.selected_index = None
             st.rerun()
 
@@ -302,24 +336,14 @@ def render_add_transaction_form() -> None:
                 "device_new": int(device_new),
             }
 
-            score_resp = call_scorer(payload)
-            if score_resp is None:
-                st.error(
-                    "Scoring service unavailable. Ensure it is running at "
-                    f"`{_SCORER_URL}` (see README for instructions)."
-                )
-                return
-
-            ok = insert_transaction(payload, score_resp)
-            if ok:
-                st.success(
-                    f"✅ **{txn_id}** inserted — "
-                    f"Risk Score: **{score_resp['risk_score']}**, "
-                    f"Decision: **{score_resp['decision']}**"
-                )
-                st.rerun()
-            else:
-                st.error("Transaction scored but DB insert failed. Check DB connectivity.")
+            score_resp = score_transaction(payload)
+            insert_transaction(payload, score_resp)
+            st.success(
+                f"✅ **{txn_id}** added — "
+                f"Risk Score: **{score_resp['risk_score']}**, "
+                f"Decision: **{score_resp['decision']}**"
+            )
+            st.rerun()
 
 
 # ---------------------------------------------------------------------------
@@ -337,22 +361,9 @@ def main() -> None:
 
     st.title("🛡️ Credit Card Fraud Detection — Live Analyst Dashboard")
 
-    # Auto-refresh every 5 seconds to pick up new scored transactions.
-    st_autorefresh(interval=_AUTOREFRESH_INTERVAL_MS, key="live_refresh")
+    _init_session_state()
 
-    # Initialise UI selection state only (data comes from DB).
-    if "selected_index" not in st.session_state:
-        st.session_state.selected_index = None
-
-    # DB connectivity banner.
-    if _get_engine() is None:
-        st.warning(
-            "⚠️ **Database not connected.** "
-            "Set `DATABASE_URL` env var and ensure Postgres is running. "
-            "The dashboard will show an empty queue until the DB is reachable."
-        )
-
-    df = fetch_recent_transactions()
+    df: pd.DataFrame = st.session_state.transactions_df
 
     render_kpis(df)
     selected_index = render_alert_queue(df)
