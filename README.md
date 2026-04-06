@@ -109,22 +109,13 @@ Results show that the full method (delay‑aware, drift‑triggered, uncertainty
 
 ---
 
-## 🚀 Live Analyst Dashboard (DB-backed)
+## 🚀 Analyst Dashboard (Static In-App Scoring)
 
-The `app.py` Streamlit dashboard can run in a fully live mode backed by
-PostgreSQL. New scored transactions appear automatically every 5 seconds
-and analyst actions (Fraud / Approved) are persisted to the database with
-a full audit trail.
+The `app.py` Streamlit dashboard runs fully locally with no external services
+required. Transactions are entered in the UI and scored on the spot using a
+local scoring function. All data is stored in-memory for the current session.
 
-### Environment variables
-
-| Variable | Default | Description |
-|---|---|---|
-| `DATABASE_URL` | `postgresql+psycopg2://postgres:postgres@localhost:5432/fraud` | SQLAlchemy connection string for Postgres |
-| `SCORER_URL` | `http://localhost:8000/score` | URL of the scoring service |
-| `MODEL_PATH` | `stacked_hybrid.pkl` | Path to the stacked hybrid model artifact (optional) |
-
-### Local run — step by step
+### Local run
 
 #### 1. Install dependencies
 
@@ -132,76 +123,28 @@ a full audit trail.
 pip install -r requirements.txt
 ```
 
-#### 2. Start PostgreSQL
+#### 2. (Optional) Add your trained model
 
-Using Docker (simplest):
+Place `stacked_hybrid.pkl` (or set `MODEL_PATH` env var) in the repository
+root. When present the app loads it automatically for inference. Without it
+the app uses a deterministic rule-based fallback scorer so it works out of
+the box.
 
-```bash
-docker run -d \
-  --name fraud-postgres \
-  -e POSTGRES_USER=postgres \
-  -e POSTGRES_PASSWORD=postgres \
-  -e POSTGRES_DB=fraud \
-  -p 5432:5432 \
-  postgres:16
-```
-
-Or use any existing Postgres instance and set `DATABASE_URL` accordingly.
-
-#### 3. Initialise the schema
+#### 3. Run the Streamlit dashboard
 
 ```bash
-psql "$DATABASE_URL" -f schema.sql
-```
-
-Or using the Docker container above:
-
-```bash
-docker exec -i fraud-postgres psql -U postgres -d fraud < schema.sql
-```
-
-#### 4. Run the scoring service
-
-```bash
-uvicorn scoring_service:app --host 0.0.0.0 --port 8000
-```
-
-To use your trained stacked hybrid model, place `stacked_hybrid.pkl` in the
-repository root (or set `MODEL_PATH`) and update the `_score_with_model`
-function in `scoring_service.py` with your inference code.
-
-#### 5. Run the Streamlit dashboard
-
-```bash
-export DATABASE_URL="postgresql+psycopg2://postgres:postgres@localhost:5432/fraud"
-export SCORER_URL="http://localhost:8000/score"
 streamlit run app.py
 ```
 
 Open http://localhost:8501 in your browser.
 
-#### 6. Add transactions
+#### 4. Add transactions
 
 - Use the **"➕ Add New Transaction (Test / Demo)"** expander in the dashboard
-  to create dummy transactions.
-- Each submission is scored by the scoring service and inserted into the DB.
-- The dashboard auto-refreshes every 5 seconds to pick up new transactions.
+  to create transactions.
+- Each submission is scored immediately in the app and added to the queue.
 - Select a row in the queue, then click **Confirm Fraud & Block** or
-  **Mark as Safe** to update its status and record the analyst action.
-
-### Database schema overview
-
-```
-transactions
-  id, amount, merchant, location, risk_score,
-  status  (Pending Review | Auto-Approved | Fraud | Approved),
-  context, created_at, reviewed_at
-
-analyst_actions
-  id, txn_id → transactions.id, action, actor, action_time, note
-```
-
-See `schema.sql` for the full DDL.
+  **Mark as Safe** to update its status.
 
 ---
 
