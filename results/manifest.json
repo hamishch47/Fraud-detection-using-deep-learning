@@ -1,0 +1,7 @@
+{
+  "artifacts": [
+    "results/stacked_hybrid.pkl",
+    "results/stacked_hybrid_model_only.pkl",
+    "results/feature_schema.json"
+  ]
+}
