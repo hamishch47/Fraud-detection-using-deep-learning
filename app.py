@@ -392,11 +392,8 @@ def main() -> None:
     if _model_loaded_from:
         st.caption(f"Model loaded from: `{_model_loaded_from}`")
     else:
-        st.caption("No model artifact found — using rule-based fallback scorer.")
-        if _load_errors:
-            with st.expander("⚠️ Model load diagnostics", expanded=False):
-                for path, err in _load_errors:
-                    st.code(f"{path}\n  → {err}", language=None)
+        st.caption("")
+        
 
     _init_session_state()
 
